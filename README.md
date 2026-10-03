@@ -101,9 +101,9 @@ then **Clear authentication**; in Codex, `codex mcp logout flashteams`.
 - When Flash Console is not running, nothing is sent and nothing is kept.
 - An event holds what Flash Console needs to show status: the agent, what
   happened, the session id, the working folder and its project name, the
-  tool name, and short excerpts of the prompt, reply, question or tool input.
-  Excerpts are at most 320 characters, on one line, with control characters
-  removed.
+  tool name, the id of the subagent involved, and short excerpts of the
+  prompt, reply, question or tool input. Excerpts are at most 320
+  characters, on one line, with control characters removed.
 - The hooks never print anything the agent would read, never write to your
   terminal and never slow the agent down for more than a moment.
 - The MCP server is separate: the agent talks to FlashTeams with your own
@@ -177,14 +177,16 @@ Only `event` is required. Fields with nothing to say are left out.
 | `error_type` | Why a turn failed, such as `rate_limit`. |
 | `error_message` | Excerpt of the error text. |
 | `subagent` | `true` when the hook fired for a subagent's tool or turn. |
+| `subagent_id` | The subagent's own id, when the agent's hook input names one: `agent_id`, which Claude Code and Codex send only for a hook that fires inside a subagent. Never sent for the main agent. |
 | `interrupted` | `true` when the person interrupted the turn. |
 
 Excerpts (`query`, `response`, `summary`, `tool_input`, `error_message`) have
 every run of whitespace collapsed to one space, control characters removed,
 and are cut to 320 characters, ending in `…` when cut. Ids and paths lose
-control characters and are left out when too long rather than cut. If a line
-would pass 8192 bytes, excerpts shorten and then go, then `project`, then
-`cwd`. The ids, `source` and the flags always stay.
+control characters and are left out when too long rather than cut; a
+`subagent_id` too long to send still leaves `subagent` set. If a line would
+pass 8192 bytes, excerpts shorten and then go, then `project`, then `cwd`.
+The ids, `source` and the flags always stay.
 
 ### Events
 
@@ -266,14 +268,15 @@ one appears.
 The tests run the hook exactly as each agent does, with the command from its
 `hooks.json`, for every event of both agents, against a throwaway socket.
 They check the JSON lines, the caps, control-character removal, the
-`subagent` and `interrupted` flags, the `source` of a session start, that
-Codex never sends `pane`, that nothing reaches stdout, the 8192-byte limit,
-inputs of several megabytes, and the quiet exits: no socket, a refused
-socket, a socket that never answers, a full socket queue, input that never
-ends, no Perl, a missing Perl module, a hook program that does not compile,
-dies, fails or is killed, a plugin folder that was deleted or lost its
-starter or its Perl program, an unreadable starter, and `errexit`, `nounset`
-and `xtrace` passed in through `SHELLOPTS` to bash running as `sh`.
+`subagent` and `interrupted` flags and `subagent_id`, the `source` of a
+session start, that Codex never sends `pane`, that nothing reaches stdout,
+the 8192-byte limit, inputs of several megabytes, and the quiet exits: no
+socket, a refused socket, a socket that never answers, a full socket queue,
+input that never ends, no Perl, a missing Perl module, a hook program that
+does not compile, dies, fails or is killed, a plugin folder that was deleted
+or lost its starter or its Perl program, an unreadable starter, and
+`errexit`, `nounset` and `xtrace` passed in through `SHELLOPTS` to bash
+running as `sh`.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
 bash for the shell-option tests (they are skipped without it), and

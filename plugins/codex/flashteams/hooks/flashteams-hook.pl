@@ -320,8 +320,13 @@ sub build_line {
         $line{pane} = clean($ENV{FLASH_CONSOLE_PANE}, ID_LIMIT);
     }
 
-    my $agent_id = $in->text('agent_id', ID_LIMIT);
-    $line{subagent} = JSON::PP::true if defined $agent_id;
+    # Both agents name the subagent a hook fired in with agent_id, and leave
+    # it out for the main agent. An id too long to send still marks the
+    # event as a subagent's.
+    if ($in->nonempty_string('agent_id')) {
+        $line{subagent}    = JSON::PP::true;
+        $line{subagent_id} = $in->text('agent_id', ID_LIMIT);
+    }
 
     for my $key (keys %line) {
         delete $line{$key} unless defined $line{$key};
@@ -344,7 +349,8 @@ sub build_line {
     push @steps, sub { delete $_[0]{project} };
     push @steps, sub { delete $_[0]{cwd} };
     push @steps, sub {
-        my %keep = map { $_ => 1 } qw(v agent event session_id source pane subagent interrupted plugin_version);
+        my %keep = map { $_ => 1 }
+          qw(v agent event session_id source pane subagent subagent_id interrupted plugin_version);
         delete @{ $_[0] }{ grep { !$keep{$_} } keys %{ $_[0] } };
     };
 
@@ -570,6 +576,13 @@ sub text {
     my ($raw, $cut) = $self->raw($key, main::RAW_ID_LIMIT()) or return undef;
     return undef if $cut || $raw !~ /\A"(.*)"\z/s;
     return main::clean(main::decode_string($1), $limit);
+}
+
+# Whether a member is a string with something in it, however long.
+sub nonempty_string {
+    my ($self, $key) = @_;
+    my $span = $self->{members}{$key} or return 0;
+    return substr(${ $self->{ref} }, $span->[0], 2) =~ /\A"[^"]/ ? 1 : 0;
 }
 
 # A string member as an excerpt.

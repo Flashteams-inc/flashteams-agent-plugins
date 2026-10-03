@@ -50,7 +50,7 @@ my $VERSION = do {
 my %ALLOWED = map { $_ => 1 } qw(
   v agent event session_id cwd pane project source query response summary
   tool_name tool_input plugin_version error_type error_message subagent
-  interrupted
+  subagent_id interrupted
 );
 
 # Each agent's hooks configuration: the command it runs for each hook, and
@@ -446,9 +446,11 @@ is(claude('SubagentStop', { agent_id => 'a1', agent_type => 'Explore' }, name =>
         name => 'claude subagent tool');
     is($sub->{subagent}, JSON::PP::true, 'claude subagent tool: subagent is true');
     ok(JSON::PP::is_bool($sub->{subagent}), 'claude subagent tool: subagent is a JSON boolean');
+    is($sub->{subagent_id}, 'agent-7', "claude subagent tool: subagent_id is the subagent's own id");
 
     my $main = claude('PostToolUse', { %tool, agent_type => 'reviewer' }, name => 'claude --agent main thread tool');
-    ok(!exists $main->{subagent}, 'claude main thread under --agent: no subagent field');
+    ok(!exists $main->{subagent},    'claude main thread under --agent: no subagent field');
+    ok(!exists $main->{subagent_id}, 'claude main thread under --agent: no subagent_id field');
 
     my $nopane = claude('Stop', {}, env => { FLASH_CONSOLE_PANE => undef }, name => 'claude without a pane');
     ok(!exists $nopane->{pane}, 'claude outside Flash Console tabs: no pane field');
@@ -541,12 +543,68 @@ for my $hook (sort keys %codex_cases) {
         { tool_name => 'Bash', tool_input => { command => 'ls' }, agent_id => 'sub-1', agent_type => 'worker' },
         name => 'codex subagent tool');
     is($sub->{subagent}, JSON::PP::true, 'codex subagent tool: subagent is true');
+    is($sub->{subagent_id}, 'sub-1', "codex subagent tool: subagent_id is the subagent's own id");
     ok(!exists $sub->{pane}, 'codex subagent tool: no pane');
+
+    # Codex's prompt hook input can name a subagent too.
+    my $prompt = codex('UserPromptSubmit', { prompt => 'Look into the logs', agent_id => 'sub-2', agent_type => 'worker' },
+        name => 'codex subagent prompt');
+    is($prompt->{subagent_id}, 'sub-2', "codex subagent prompt: subagent_id is the subagent's own id");
 
     is(codex('PreToolUse', { tool_name => 'Bash', tool_input => { command => 'ls' } }, name => 'codex PreToolUse Bash'),
         undef, 'codex PreToolUse for other tools: nothing sent');
     is(codex('SubagentStop', { agent_id => 'sub-1' }, name => 'codex SubagentStop'),
         undef, 'codex hooks the plugin does not use: nothing sent');
+}
+
+# ---------------------------------------------------------------------------
+# Which subagent an event came from: agent_id from the hook input, sent as
+# subagent_id beside the subagent flag, and never on the main agent's events.
+
+{
+    my %agent = (claude => \&claude, codex => \&codex);
+    my %tool = (tool_name => 'Bash', tool_input => { command => 'ls' }, tool_response => 'a');
+    for my $name (sort keys %agent) {
+        my $run = $agent{$name};
+        for my $hook (qw(SessionStart UserPromptSubmit PostToolUse PermissionRequest Stop)) {
+            my $event = $run->($hook, { %tool, prompt => 'hi', agent_type => 'reviewer' }, name => "$name main agent $hook");
+            ok($event && !exists $event->{subagent_id}, "$name main agent $hook: no subagent_id");
+            ok($event && !exists $event->{subagent},    "$name main agent $hook: no subagent flag");
+        }
+
+        my $long = $run->('PostToolUse', { %tool, agent_id => 'a' x 129 }, name => "$name over-long agent_id");
+        is($long->{subagent}, JSON::PP::true, "$name: an agent_id over 128 characters still marks a subagent");
+        ok(!exists $long->{subagent_id}, "$name: an agent_id over 128 characters is not sent");
+
+        my $odd = $run->('PostToolUse', { %tool, agent_id => "a\x07g\x{1b}ent\x{202E}-9" }, name => "$name odd agent_id");
+        is($odd->{subagent_id}, 'agent-9', "$name: subagent_id is cleaned like any id");
+
+        my $blank = $run->('PostToolUse', { %tool, agent_id => "\x{202E}\x07" }, name => "$name invisible agent_id");
+        is($blank->{subagent}, JSON::PP::true, "$name: an agent_id with nothing visible still marks a subagent");
+        ok(!exists $blank->{subagent_id}, "$name: an agent_id with nothing visible is not sent");
+
+        for my $value ('', undef, 7) {
+            my $label = defined $value ? $value eq '' ? 'empty' : 'numeric' : 'null';
+            my $none = $run->('PostToolUse', { %tool, agent_id => $value }, name => "$name $label agent_id");
+            ok(!exists $none->{subagent} && !exists $none->{subagent_id}, "$name: a $label agent_id is no subagent");
+        }
+    }
+
+    # When the line is too long, subagent_id stays with the other ids.
+    my $big = claude(
+        'PermissionRequest',
+        {
+            cwd        => '/' . ("\x{1F680}" x 1000),
+            session_id => 's' x 128,
+            agent_id   => "\x{1F916}" x 128,
+            tool_name  => 'Bash',
+            tool_input => { command => 'x' x 9000 },
+        },
+        env  => { FLASH_CONSOLE_PANE => 'p' x 128 },
+        name => 'largest subagent event'
+    );
+    is($big->{subagent_id}, "\x{1F916}" x 128, 'largest subagent event: subagent_id survives');
+    is($big->{subagent},    JSON::PP::true,     'largest subagent event: subagent survives');
 }
 
 # ---------------------------------------------------------------------------
