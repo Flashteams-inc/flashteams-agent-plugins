@@ -20,6 +20,25 @@ perl -c test/manifests.t
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck shared/hooks/flashteams-hook.sh script/check script/sync
+  # Each hook command in both hooks.json files, and the guard script it
+  # hands to sh -c, checked as an sh script of its own.
+  commands=$(mktemp -d)
+  trap 'rm -rf "$commands"' EXIT
+  perl -MJSON::PP -e '
+    my ($dir, @files) = @ARGV;
+    my ($n, %seen) = (0);
+    for my $file (@files) {
+      open(my $fh, "<", $file) or die "$file: $!";
+      my $config = decode_json(do { local $/; <$fh> });
+      for my $handler (map { @{ $_->{hooks} } } map { @$_ } values %{ $config->{hooks} }) {
+        my ($guard) = $handler->{command} =~ /\Ash -c \x27([^\x27]*)\x27 sh /;
+        for my $script (grep { defined && !$seen{$_}++ } $handler->{command}, $guard) {
+          open(my $out, ">", "$dir/" . ++$n . ".sh") or die "$dir: $!";
+          print $out "#!/bin/sh\n$script\n";
+        }
+      }
+    }' "$commands" plugins/claude/flashteams/hooks/hooks.json plugins/codex/flashteams/hooks/hooks.json
+  shellcheck "$commands"/*.sh
   echo "ShellCheck found nothing"
 elif [ -n "${CI:-}" ]; then
   echo "ShellCheck is required in CI" >&2

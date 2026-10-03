@@ -1,8 +1,9 @@
 #!/usr/bin/perl
-# Runs the hook the way each agent runs it, for every event both agents
-# send, against a throwaway socket that stands in for Flash Console, and
-# checks what arrives: the JSON line, the caps, the cleaning, the flags, and
-# that the hook stays silent and quick when Flash Console is not there.
+# Runs the hook the way each agent runs it, with the command from its hooks
+# configuration, for every event both agents send, against a throwaway
+# socket that stands in for Flash Console, and checks what arrives: the JSON
+# line, the caps, the cleaning, the flags, and that the hook stays silent and
+# quick when Flash Console is not there and when the plugin folder has gone.
 
 use strict;
 use warnings;
@@ -51,6 +52,18 @@ my %ALLOWED = map { $_ => 1 } qw(
   interrupted
 );
 
+# Each agent's hooks configuration: the command it runs for each hook, and
+# the variable that holds the plugin's folder in that command.
+my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
+my %COMMAND;
+for my $agent (sort keys %PLUGIN) {
+    open(my $fh, '<', "$PLUGIN{$agent}/hooks/hooks.json") or die $!;
+    my $config = do { local $/; decode_json(<$fh>) };
+    for my $hook (keys %{ $config->{hooks} }) {
+        $COMMAND{$agent}{$hook} = $config->{hooks}{$hook}[0]{hooks}[0]{command};
+    }
+}
+
 # A project folder with a git repository, worked in from a subfolder.
 my $PROJECT = "$TMP/work/my-app";
 make_path("$PROJECT/.git", "$PROJECT/src");
@@ -78,17 +91,27 @@ sub listen_on {
     return $listener;
 }
 
+# What an agent runs for a hook: the command from its hooks configuration,
+# through sh, with the plugin's folder in the agent's variable. A hook the
+# plugin does not register gets the same command with its own name, as if it
+# were registered.
+sub agent_command {
+    my ($agent, $hook, $root) = @_;
+    my $command = $COMMAND{$agent}{$hook} // ($COMMAND{$agent}{Stop} =~ s/ Stop\z/ $hook/r);
+    return (['sh', '-c', $command], { $ROOT_VARIABLE{$agent} => $root // $PLUGIN{$agent} });
+}
+
 # Runs one hook. Options: agent, hook, input (a hash is encoded as JSON),
-# env (undef removes a variable), command (instead of the agent's hooks
-# command), listener (undef for none), keep_stdin_open, ascii.
+# env (undef removes a variable), root (the plugin folder the agent's command
+# names), command (instead of the agent's command), listener (undef for
+# none), keep_stdin_open, ascii.
 # Returns exit status (or "signal N" when a signal ended it), stdout, stderr,
 # the bytes the listener received, and how long the hook ran.
 sub run_hook {
     my (%opt) = @_;
     my $agent = $opt{agent} // 'claude';
-    my @command = $opt{command}
-      ? @{ $opt{command} }
-      : ('sh', "$PLUGIN{$agent}/hooks/flashteams-hook.sh", $agent, $opt{hook});
+    my ($command, $agent_env) = $opt{command} ? ($opt{command}, {}) : agent_command($agent, $opt{hook}, $opt{root});
+    my @command = @$command;
     my $listener = exists $opt{listener} ? $opt{listener} : $LISTENER;
 
     my $input = $opt{input} // '';
@@ -100,6 +123,7 @@ sub run_hook {
         PATH                       => $ENV{PATH},
         HOME                       => $TMP,
         FLASH_CONSOLE_AGENT_SOCKET => $SOCKET,
+        %$agent_env,
         %{ $opt{env} || {} },
     );
     delete $ENV{$_} for grep { !defined $ENV{$_} } keys %ENV;
@@ -744,10 +768,16 @@ for my $hook (sort keys %codex_cases) {
 # ---------------------------------------------------------------------------
 # When Flash Console is not there, or not answering: exit 0, quietly, fast.
 
+# Runs a hook, by default claude Stop, and checks it was quiet and quick.
+# Options: agent, hook, root, env, listener and command, as for run_hook,
+# and within, the most seconds it may take.
 sub quiet {
     my ($name, %opt) = @_;
-    my $run = run_hook(agent => 'claude', hook => 'Stop', input => { %CLAUDE_INPUT, hook_event_name => 'Stop' },
-        env => { %PANE, %{ $opt{env} || {} } }, %opt{qw(listener command)});
+    my $agent = $opt{agent} // 'claude';
+    my $hook  = $opt{hook}  // 'Stop';
+    my %input = $agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT;
+    my $run = run_hook(agent => $agent, hook => $hook, input => { %input, hook_event_name => $hook },
+        env => { %PANE, %{ $opt{env} || {} } }, %opt{qw(listener command root)});
     is($run->{status}, 0,  "$name: exits 0");
     is($run->{stdout}, '', "$name: nothing on stdout");
     is($run->{stderr}, '', "$name: nothing on stderr");
@@ -854,6 +884,61 @@ quiet('no socket', env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" },
             listener => $LISTENER,
         );
         is($run->{data}, '', "$agent with a missing module: nothing sent");
+    }
+}
+
+# ---------------------------------------------------------------------------
+# A plugin folder that has gone. When Codex updates the plugin it deletes the
+# old folder but keeps running the hook commands it read from it, and sh on
+# a missing file complains and exits non-zero. So every hook command starts
+# the starter through a guard that exits 0 without a word when the starter
+# is missing or cannot be read.
+
+{
+    my $gone = "$TMP/deleted-plugin";
+    my $bare = run_hook(command => ['sh', "$gone/hooks/flashteams-hook.sh", 'claude', 'Stop'], listener => undef);
+    isnt($bare->{status}, 0, 'sh on a missing starter really fails');
+    isnt($bare->{stderr}, '', 'sh on a missing starter really complains');
+
+    for my $agent (sort keys %COMMAND) {
+        # The starter deleted, the Perl program left behind.
+        my $no_starter = "$TMP/no-starter-$agent";
+        make_path("$no_starter/hooks");
+        copy($HOOK_PL, "$no_starter/hooks/flashteams-hook.pl") or die $!;
+
+        # The starter left behind, the Perl program deleted.
+        my $no_program = "$TMP/no-program-$agent";
+        make_path("$no_program/hooks");
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$no_program/hooks/flashteams-hook.sh") or die $!;
+
+        my %folders = (
+            'a deleted plugin folder'                  => $gone,
+            'a plugin folder without a starter'        => $no_starter,
+            'a plugin folder without the Perl program' => $no_program,
+        );
+        for my $what (sort keys %folders) {
+            for my $hook (sort keys %{ $COMMAND{$agent} }) {
+                my $run = quiet("$agent $hook in $what", agent => $agent, hook => $hook, root => $folders{$what},
+                    listener => $LISTENER);
+                is($run->{data}, '', "$agent $hook in $what: nothing sent");
+            }
+        }
+    }
+
+    # A starter that cannot be read. Root reads every file, so this only
+    # means something for anyone else.
+  SKIP: {
+        skip 'root can read any file', 10 if $> == 0;
+        my $locked = "$TMP/locked-plugin";
+        make_path("$locked/hooks");
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$locked/hooks/flashteams-hook.sh") or die $!;
+        copy($HOOK_PL, "$locked/hooks/flashteams-hook.pl") or die $!;
+        chmod(0000, "$locked/hooks/flashteams-hook.sh") or die $!;
+        for my $agent (sort keys %COMMAND) {
+            my $run = quiet("$agent with an unreadable starter", agent => $agent, root => $locked, listener => $LISTENER);
+            is($run->{data}, '', "$agent with an unreadable starter: nothing sent");
+        }
+        chmod(0644, "$locked/hooks/flashteams-hook.sh");
     }
 }
 

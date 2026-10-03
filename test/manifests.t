@@ -119,7 +119,12 @@ ok(!-e "$ROOT/$CLAUDE/$_", "the Claude Code plugin has no $_") for qw(plugin.jso
 ok(!-e "$ROOT/$CODEX/$_", "the Codex plugin has no $_") for qw(.claude-plugin plugin.json mcp.json);
 
 # Hooks: every command starts the shared hook with the right agent and the
-# event it is registered for.
+# event it is registered for, through a guard that exits 0 without a word
+# when the starter is missing or unreadable. Codex keeps running the hook
+# commands it read from a plugin folder after an update has deleted that
+# folder, and sh on a missing file complains and exits non-zero.
+my $GUARD = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; }
+  . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
 my %HOOKS = (
     claude => {
         file   => "$CLAUDE/hooks/hooks.json",
@@ -150,9 +155,9 @@ for my $agent (sort keys %HOOKS) {
         is(scalar @handlers, 1, "$agent $event has one handler");
         my $handler = $handlers[0];
         is($handler->{type}, 'command', "$agent $event is a command hook");
-        is($handler->{command}, qq{sh "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $event},
-            "$agent $event starts the shared hook");
-        ok(!exists $handler->{args}, "$agent $event runs through sh, so a missing Perl stays quiet");
+        is($handler->{command}, qq{$GUARD "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $event},
+            "$agent $event starts the shared hook through the guard");
+        ok(!exists $handler->{args}, "$agent $event runs through sh, so a missing Perl or starter stays quiet");
         ok(!$handler->{async}, "$agent $event runs in order");
         cmp_ok($handler->{timeout}, '<=', 5, "$agent $event has a short timeout");
     }

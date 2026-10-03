@@ -3,12 +3,13 @@
 #
 #   sh <plugin>/hooks/flashteams-hook.sh <agent> <hook-event>
 #
-# and this passes the agent's input on to flashteams-hook.pl. It stays quiet
-# and exits 0 in every case: when Flash Console is not running, when Perl is
-# missing, and when anything goes wrong, even when the Perl program cannot
-# compile, a module it needs is missing, or it is killed. An agent shows a
-# hook that exits non-zero, or writes to stderr, as an error, so neither can
-# happen here.
+# through a short guard that first checks this file is still there (see the
+# README), and this passes the agent's input on to flashteams-hook.pl. It
+# stays quiet and exits 0 in every case: when Flash Console is not running,
+# when Perl is missing, and when anything goes wrong, even when the Perl
+# program cannot compile, a module it needs is missing, or it is killed. An
+# agent shows a hook that exits non-zero, or writes to stderr, as an error,
+# so neither can happen here.
 
 # Nothing printed here reaches the agent: not Perl's output, and not the
 # shell's own, such as its note that Perl was killed.

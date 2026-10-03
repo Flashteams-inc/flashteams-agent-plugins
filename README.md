@@ -138,6 +138,20 @@ program with all output discarded and then exits 0 whatever Perl did. So
 when Perl cannot compile the program, lacks a module it needs, or is killed,
 the agent never sees a hook error.
 
+Every command in `hooks.json` starts the starter through a short guard:
+
+```sh
+sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" >/dev/null 2>&1; exit 0' \
+  sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude Stop
+```
+
+Codex uses `${PLUGIN_ROOT}` in place of `${CLAUDE_PLUGIN_ROOT}`. When Codex
+updates the plugin, it deletes the old plugin folder but keeps running the
+hook commands it read earlier, which name files in that folder, and `sh` on a
+missing file prints an error and exits non-zero. The guard exits 0 without a
+word when the starter is missing or cannot be read, and discards anything
+the starter prints.
+
 ### Fields
 
 Only `event` is required. Fields with nothing to say are left out.
@@ -247,17 +261,20 @@ one appears.
    `shared/hooks/flashteams-hook.pl` together (the tests check they match).
    People only receive an update when the version changes.
 
-The tests run the hook exactly as each agent does, for every event of both
-agents, against a throwaway socket. They check the JSON lines, the caps,
-control-character removal, the `subagent` and `interrupted` flags, the
-`source` of a session start, that Codex never sends `pane`, that nothing
-reaches stdout, the 8192-byte limit, inputs of several megabytes, and the
-quiet exits: no socket, a refused socket, a socket that never answers, a
-full socket queue, input that never ends, no Perl, a missing Perl module,
-and a hook program that does not compile, dies, fails or is killed.
+The tests run the hook exactly as each agent does, with the command from its
+`hooks.json`, for every event of both agents, against a throwaway socket.
+They check the JSON lines, the caps, control-character removal, the
+`subagent` and `interrupted` flags, the `source` of a session start, that
+Codex never sends `pane`, that nothing reaches stdout, the 8192-byte limit,
+inputs of several megabytes, and the quiet exits: no socket, a refused
+socket, a socket that never answers, a full socket queue, input that never
+ends, no Perl, a missing Perl module, a hook program that does not compile,
+dies, fails or is killed, a plugin folder that was deleted or lost its
+starter or its Perl program, and an unreadable starter.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10)
-and ShellCheck.
+and ShellCheck, which also checks each command in `hooks.json` and the guard
+it runs.
 
 Write comments, docs and messages in plain language, and do not use long
 dashes.
