@@ -54,9 +54,12 @@ use constant {
 
 my $STARTED = Time::HiRes::time();
 
-# Text that must never reach Flash Console: control characters, and the
-# invisible marks that reorder text on screen.
-my $UNSAFE = qr/[\p{Cc}\x{2028}\x{2029}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/;
+# Text that must never reach Flash Console: control characters, line and
+# paragraph separators, the invisible marks that reorder text on screen
+# (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), and the
+# other characters that take no space, so text can hide nothing between its
+# visible letters (U+200B to U+200D, U+2060 to U+2064, U+FEFF).
+my $UNSAFE = qr/[\p{Cc}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/;
 
 # What each JSON escape stands for.
 my %ESCAPES = (q{"} => q{"}, q{\\} => q{\\}, q{/} => q{/}, b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");

@@ -53,6 +53,12 @@ my %ALLOWED = map { $_ => 1 } qw(
   subagent_id interrupted
 );
 
+# Characters no field may carry: control characters, line and paragraph
+# separators, the marks that reorder text, and the characters that take no
+# space.
+my @INVISIBLE = map { chr } 0x061C, 0x200B .. 0x200F, 0x2060 .. 0x2064, 0xFEFF;
+my $UNSAFE = qr/[\x00-\x1f\x7f-\x9f\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/;
+
 # Each agent's hooks configuration: the command it runs for each hook, and
 # the variable that holds the plugin's folder in that command.
 my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
@@ -120,14 +126,17 @@ sub run_hook {
         $input = $opt{ascii} ? JSON::PP->new->ascii->canonical->encode($input) : $JSON->encode($input);
     }
 
-    local %ENV = (
+    my %env = (
         PATH                       => $ENV{PATH},
         HOME                       => $TMP,
         FLASH_CONSOLE_AGENT_SOCKET => $SOCKET,
         %$agent_env,
         %{ $opt{env} || {} },
     );
-    delete $ENV{$_} for grep { !defined $ENV{$_} } keys %ENV;
+    delete $env{$_} for grep { !defined $env{$_} } keys %env;
+    # The environment holds bytes: text with wide characters goes in as UTF-8.
+    utf8::encode($env{$_}) for grep { utf8::is_utf8($env{$_}) } keys %env;
+    local %ENV = %env;
 
     my $started = time;
     my $err = gensym;
@@ -241,7 +250,7 @@ sub event_of {
     my @unknown = grep { !$ALLOWED{$_} } sort keys %$event;
     is("@unknown", '', "$name: only protocol fields");
     for my $key (grep { !ref $event->{$_} } keys %$event) {
-        unlike($event->{$key}, qr/[\x00-\x1f\x7f]/, "$name: no control characters in $key");
+        unlike($event->{$key}, $UNSAFE, "$name: no control or invisible characters in $key");
     }
     return $event;
 }
@@ -686,6 +695,79 @@ for my $hook (sort keys %codex_cases) {
 
     my $long_id = claude('SessionStart', { session_id => 'i' x 129 }, name => 'over-long id');
     ok(!exists $long_id->{session_id}, 'an id over 128 characters is dropped, not cut');
+}
+
+# ---------------------------------------------------------------------------
+# Characters that take no space or reorder text: U+061C, U+200B to U+200F,
+# U+2060 to U+2064 and U+FEFF are removed from every text field, as control
+# characters are.
+
+{
+    for my $char (@INVISIBLE) {
+        my $code = sprintf('U+%04X', ord $char);
+        my $event = claude('UserPromptSubmit', { prompt => "a${char}b ${char} c" }, name => "$code in a prompt");
+        is($event->{query}, 'ab c', "$code is removed from an excerpt, and the spaces around it collapse");
+        my $id = claude('SessionStart', { session_id => "abc${char}123" }, name => "$code in an id");
+        is($id->{session_id}, 'abc123', "$code is removed from an id");
+    }
+
+    my $all = join('', @INVISIBLE);
+    my $tool = claude(
+        'PermissionRequest',
+        {
+            session_id => "abc${all}123",
+            cwd        => "$PROJECT/s${all}rc",
+            agent_id   => "agent${all}-7",
+            tool_name  => "Ba${all}sh",
+            tool_input => { command => "rm -rf${all} build", description => "${all}Remove the build" },
+        },
+        env  => { FLASH_CONSOLE_PANE => "pane${all}-42" },
+        name => 'every invisible character in every field of a tool event'
+    );
+    is_deeply(
+        $tool,
+        {
+            common('claude', 'abc123'),
+            pane        => 'pane-42',
+            event       => 'permission_request',
+            subagent    => JSON::PP::true,
+            subagent_id => 'agent-7',
+            tool_name   => 'Bash',
+            tool_input  => '{"command":"rm -rf build","description":"Remove the build"}',
+            summary     => 'Remove the build',
+        },
+        'every invisible character is removed from every field of a tool event'
+    ) or diag(explain($tool));
+
+    my %cases = (
+        SessionStart => [{ source => "re${all}sume" }, { source => 'resume' }],
+        Stop         => [{ last_assistant_message => "Do${all}ne." }, { response => 'Done.' }],
+        StopFailure  => [
+            { error => "rate${all}_limit", last_assistant_message => "${all}API Error${all}" },
+            { error_type => 'rate_limit', error_message => 'API Error' },
+        ],
+        Notification => [
+            { notification_type => "idle${all}_prompt", message => "Waiting ${all} for you" },
+            { summary => 'Waiting for you' },
+        ],
+    );
+    for my $hook (sort keys %cases) {
+        my ($input, $expected) = @{ $cases{$hook} };
+        my $event = claude($hook, $input, name => "every invisible character in claude $hook");
+        is($event->{$_}, $expected->{$_}, "every invisible character is removed from $_") for sort keys %$expected;
+    }
+
+    my $question = codex(
+        'PreToolUse',
+        { tool_name => 'request_user_input', tool_input => { questions => [{ question => "Which${all} one?" }] } },
+        name => 'every invisible character in a codex question'
+    );
+    is($question->{summary}, 'Which one?', 'every invisible character is removed from a codex question');
+
+    # Characters just outside those ranges stay.
+    my $kept = claude('UserPromptSubmit', { prompt => "\x{061B} \x{2027} \x{2030} \x{2070} \x{FEFC}" },
+        name => 'neighbours of the removed characters');
+    is($kept->{query}, "\x{061B} \x{2027} \x{2030} \x{2070} \x{FEFC}", 'characters just outside the removed ranges stay');
 }
 
 # ---------------------------------------------------------------------------
