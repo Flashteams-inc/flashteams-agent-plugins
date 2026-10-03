@@ -211,8 +211,8 @@ plugins/claude/flashteams/          the Claude Code plugin
   hooks/flashteams-hook.pl          copy of shared/hooks/
   skills/flashteams-next-task/      copy of shared/skills/
 plugins/codex/flashteams/           the Codex plugin
-  plugin.json
-  mcp.json
+  .codex-plugin/plugin.json
+  .mcp.json                         the FlashTeams MCP server
   hooks/ and skills/                as above
 shared/                             the hook program and skill, edited here
 script/check                        every check, as CI runs it
@@ -224,6 +224,15 @@ Each plugin keeps its own copy of the shared files because each agent
 installs a plugin folder on its own. The two plugin folders are separate so
 neither agent loads the other's manifest.
 
+The Codex plugin uses the `.codex-plugin/plugin.json` layout on purpose.
+Codex also reads a newer layout with `plugin.json` and `mcp.json` at the
+plugin root, but Codex 0.160 loads only the skill and the MCP server from it
+and registers none of its hooks, even with a `.codex-plugin/plugin.json`
+beside it. With `.codex-plugin/plugin.json` alone, Codex loads all three, and
+finds the hooks at `hooks/hooks.json`, where it looks when the manifest names
+none. Do not add a root `plugin.json` to the Codex plugin; the tests fail if
+one appears.
+
 ## Contributing
 
 1. Edit the hook program and the skill in `shared/`, never the copies, then
@@ -232,9 +241,11 @@ neither agent loads the other's manifest.
    scripts, runs Claude Code's plugin validator when `claude` is installed,
    and runs the tests. GitHub Actions runs the same script on macOS and
    Ubuntu for every push and pull request.
-3. For a release, raise `version` in both `plugin.json` files and `$VERSION`
-   in `shared/hooks/flashteams-hook.pl` together (the tests check they
-   match). People only receive an update when the version changes.
+3. For a release, raise `version` in
+   `plugins/claude/flashteams/.claude-plugin/plugin.json`,
+   `plugins/codex/flashteams/.codex-plugin/plugin.json` and `$VERSION` in
+   `shared/hooks/flashteams-hook.pl` together (the tests check they match).
+   People only receive an update when the version changes.
 
 The tests run the hook exactly as each agent does, for every event of both
 agents, against a throwaway socket. They check the JSON lines, the caps,

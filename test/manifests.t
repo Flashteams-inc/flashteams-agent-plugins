@@ -55,6 +55,13 @@ ok($hook_version, 'the hook names its version');
 }
 
 # Codex marketplace and plugin.
+#
+# Codex 0.160 loads a plugin's hooks only from a .codex-plugin/plugin.json
+# manifest. Given a root plugin.json instead (the Agent Plugins layout), it
+# still loads the skill and the MCP server but registers no hooks at all,
+# even when a .codex-plugin/plugin.json sits beside it. So the Codex plugin
+# has only .codex-plugin/plugin.json, and its hooks sit at hooks/hooks.json,
+# where Codex looks when the manifest names no hooks.
 {
     my $market = json('.agents/plugins/marketplace.json');
     is($market->{name}, 'flashteams', 'Codex marketplace is named flashteams');
@@ -62,23 +69,54 @@ ok($hook_version, 'the hook names its version');
     my ($entry) = @{ $market->{plugins} || [] };
     is($entry->{name}, 'flashteams', 'Codex plugin entry is named flashteams');
     is_deeply($entry->{source}, { source => 'local', path => "./$CODEX" }, 'Codex plugin entry points at its own folder');
-    ok($entry->{policy}{installation} && $entry->{policy}{authentication} && $entry->{category},
-        'Codex plugin entry has its policy and category');
+    ok(!exists $entry->{version}, 'the Codex version lives only in plugin.json');
+    my %installation = map { $_ => 1 } qw(NOT_AVAILABLE AVAILABLE INSTALLED_BY_DEFAULT);
+    my %authentication = map { $_ => 1 } qw(ON_INSTALL ON_USE);
+    ok($installation{ $entry->{policy}{installation} // '' }, 'Codex plugin entry has an installation policy');
+    ok($authentication{ $entry->{policy}{authentication} // '' }, 'Codex plugin entry has an authentication policy');
+    ok($entry->{category}, 'Codex plugin entry has a category');
 
-    my $manifest = json("$CODEX/plugin.json");
+    my $manifest = json("$CODEX/.codex-plugin/plugin.json");
     is($manifest->{name},    'flashteams',  'Codex plugin.json name');
     is($manifest->{version}, $hook_version, 'Codex plugin version matches the hook');
     is($manifest->{license}, 'MIT',         'Codex plugin license');
-    is($manifest->{extensions}{'com.openai'}{hooks}, './hooks/hooks.json', 'Codex plugin names its hooks file');
+    ok($manifest->{description} && $manifest->{author} && $manifest->{author}{name},
+        'Codex plugin.json has a description and an author');
+    is($manifest->{skills},     './skills/',   'Codex plugin.json names the skills folder');
+    is($manifest->{mcpServers}, './.mcp.json', 'Codex plugin.json names its MCP servers file');
 
-    my $mcp = json("$CODEX/mcp.json");
-    is_deeply($mcp->{mcpServers}, { flashteams => { type => 'streamable-http', url => $MCP_URL } },
+    # The fields Codex's own plugin validator accepts. It rejects hooks, and
+    # naming hooks would also stop Codex looking at hooks/hooks.json.
+    my %known = map { $_ => 1 } qw(id name version description skills apps mcpServers interface author
+                                   homepage repository license keywords);
+    my @unknown = grep { !$known{$_} } sort keys %$manifest;
+    is("@unknown", '', 'Codex plugin.json has only fields Codex accepts');
+    ok(!exists $manifest->{hooks}, 'Codex finds the hooks at hooks/hooks.json, its default');
+
+    my $interface = $manifest->{interface} || {};
+    for my $field (qw(displayName shortDescription longDescription developerName category)) {
+        ok(defined $interface->{$field} && !ref $interface->{$field} && $interface->{$field} =~ /\S/,
+            "Codex plugin interface has $field");
+    }
+    ok(ref $interface->{capabilities} eq 'ARRAY' && !grep({ ref $_ || !/\S/ } @{ $interface->{capabilities} }),
+        'Codex plugin interface lists its capabilities');
+    ok(ref $interface->{defaultPrompt} eq 'ARRAY' && @{ $interface->{defaultPrompt} } >= 1
+          && @{ $interface->{defaultPrompt} } <= 3, 'Codex plugin interface has one to three starter prompts');
+    like($interface->{websiteURL} // '', qr{\Ahttps://}, 'Codex plugin website is https');
+
+    my $mcp = json("$CODEX/.mcp.json");
+    is_deeply($mcp, { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } },
         'Codex bundles the flashteams MCP server, with no token or header');
+
+    ok(-f "$ROOT/$CODEX/hooks/hooks.json", 'the Codex hooks are at hooks/hooks.json');
+    ok(-f "$ROOT/$CODEX/skills/flashteams-next-task/SKILL.md", 'the Codex skill is under skills/');
 }
 
-# Neither agent can load the other's manifest.
+# Neither agent can load the other's manifest. The Codex plugin has no root
+# plugin.json, which would make Codex skip its hooks, and no mcp.json, which
+# Codex would not read from this layout.
 ok(!-e "$ROOT/$CLAUDE/$_", "the Claude Code plugin has no $_") for qw(plugin.json mcp.json .codex-plugin);
-ok(!-e "$ROOT/$CODEX/$_", "the Codex plugin has no $_") for qw(.claude-plugin .mcp.json);
+ok(!-e "$ROOT/$CODEX/$_", "the Codex plugin has no $_") for qw(.claude-plugin plugin.json mcp.json);
 
 # Hooks: every command starts the shared hook with the right agent and the
 # event it is registered for.
