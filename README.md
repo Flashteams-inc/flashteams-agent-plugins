@@ -151,6 +151,7 @@ Only `event` is required. Fields with nothing to say are left out.
 | `cwd` | The agent's working folder. |
 | `pane` | The Flash Console pane, from `FLASH_CONSOLE_PANE`. Claude Code only. |
 | `project` | The name of the folder holding the git repository around `cwd`, or of `cwd` itself. |
+| `source` | Why the session started, on `session_start` only: the agent's own word, passed on as given. Both agents document `startup`, `resume`, `clear` and `compact`; Claude Code also sends `fork`. |
 | `query` | Excerpt of the prompt. |
 | `response` | Excerpt of the agent's reply. |
 | `summary` | Excerpt of what the agent asks for or about. |
@@ -167,13 +168,13 @@ every run of whitespace collapsed to one space, control characters removed,
 and are cut to 320 characters, ending in `…` when cut. Ids and paths lose
 control characters and are left out when too long rather than cut. If a line
 would pass 8192 bytes, excerpts shorten and then go, then `project`, then
-`cwd`.
+`cwd`. The ids, `source` and the flags always stay.
 
 ### Events
 
 | Event | Claude Code hook | Codex hook |
 | :- | :- | :- |
-| `session_start` | `SessionStart` | `SessionStart` |
+| `session_start` | `SessionStart`, with `source` | `SessionStart`, with `source` |
 | `prompt_submit` | `UserPromptSubmit` | `UserPromptSubmit` |
 | `tool_complete` | `PostToolUse`, `PostToolUseFailure` | `PostToolUse` |
 | `permission_request` | `PermissionRequest`; `Notification` of type `permission_prompt` | `PermissionRequest` |
@@ -193,7 +194,9 @@ carry `pane`. Codex runs hooks in a shared background server whose
 environment belongs to whichever terminal started it, so Codex events never
 carry `pane`, even when the variable is visible. Flash Console matches a
 Codex event to its pane by session, working folder and timing, and drops it
-when no pane is clearly right.
+when no pane is clearly right. Codex runs `SessionStart` when the first
+prompt is sent, not when it launches, so a Codex `session_start` arrives just
+before its first `prompt_submit`.
 
 ## What is in this repository
 
@@ -235,12 +238,12 @@ neither agent loads the other's manifest.
 
 The tests run the hook exactly as each agent does, for every event of both
 agents, against a throwaway socket. They check the JSON lines, the caps,
-control-character removal, the `subagent` and `interrupted` flags, that Codex
-never sends `pane`, that nothing reaches stdout, the 8192-byte limit, inputs
-of several megabytes, and the quiet exits: no socket, a refused socket, a
-socket that never answers, a full socket queue, input that never ends, no
-Perl, a missing Perl module, and a hook program that does not compile, dies,
-fails or is killed.
+control-character removal, the `subagent` and `interrupted` flags, the
+`source` of a session start, that Codex never sends `pane`, that nothing
+reaches stdout, the 8192-byte limit, inputs of several megabytes, and the
+quiet exits: no socket, a refused socket, a socket that never answers, a
+full socket queue, input that never ends, no Perl, a missing Perl module,
+and a hook program that does not compile, dies, fails or is killed.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10)
 and ShellCheck.

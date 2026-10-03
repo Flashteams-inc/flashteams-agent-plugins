@@ -173,7 +173,7 @@ sub claude_event {
     my ($hook, $in) = @_;
 
     if ($hook eq 'SessionStart') {
-        return { event => 'session_start' };
+        return session_event($in);
     }
     if ($hook eq 'UserPromptSubmit') {
         return { event => 'prompt_submit', query => $in->excerpt('prompt') };
@@ -225,7 +225,7 @@ sub codex_event {
     my ($hook, $in) = @_;
 
     if ($hook eq 'SessionStart') {
-        return { event => 'session_start' };
+        return session_event($in);
     }
     if ($hook eq 'UserPromptSubmit') {
         return { event => 'prompt_submit', query => $in->excerpt('prompt') };
@@ -250,6 +250,15 @@ sub codex_event {
         return { event => 'stop', interrupted => JSON::PP::true };
     }
     return;
+}
+
+# Why the session started, in the agent's own word (such as startup, resume,
+# clear or compact), passed on as given. Flash Console uses it to tell the
+# same pane moving to a new conversation from another agent starting inside
+# it.
+sub session_event {
+    my ($in) = @_;
+    return { event => 'session_start', source => $in->text('source', NAME_LIMIT) };
 }
 
 sub tool_event {
@@ -335,7 +344,7 @@ sub build_line {
     push @steps, sub { delete $_[0]{project} };
     push @steps, sub { delete $_[0]{cwd} };
     push @steps, sub {
-        my %keep = map { $_ => 1 } qw(v agent event session_id pane subagent interrupted plugin_version);
+        my %keep = map { $_ => 1 } qw(v agent event session_id source pane subagent interrupted plugin_version);
         delete @{ $_[0] }{ grep { !$keep{$_} } keys %{ $_[0] } };
     };
 

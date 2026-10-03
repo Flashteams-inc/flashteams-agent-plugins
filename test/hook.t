@@ -46,8 +46,9 @@ my $VERSION = do {
 };
 
 my %ALLOWED = map { $_ => 1 } qw(
-  v agent event session_id cwd pane project query response summary tool_name
-  tool_input plugin_version error_type error_message subagent interrupted
+  v agent event session_id cwd pane project source query response summary
+  tool_name tool_input plugin_version error_type error_message subagent
+  interrupted
 );
 
 # A project folder with a git repository, worked in from a subfolder.
@@ -276,7 +277,7 @@ sub claude {
 my %claude_cases = (
     'SessionStart' => [
         { source => 'startup', model => 'claude-opus-5' },
-        { event => 'session_start' },
+        { event => 'session_start', source => 'startup' },
     ],
     'UserPromptSubmit' => [
         { prompt => "Write a function\nto parse CSV files" },
@@ -454,7 +455,7 @@ sub codex {
 }
 
 my %codex_cases = (
-    'SessionStart' => [{ source => 'startup' }, { event => 'session_start' }],
+    'SessionStart' => [{ source => 'startup' }, { event => 'session_start', source => 'startup' }],
     'UserPromptSubmit' => [
         { prompt => 'Fix the failing build' },
         { event => 'prompt_submit', query => 'Fix the failing build' },
@@ -521,6 +522,50 @@ for my $hook (sort keys %codex_cases) {
         undef, 'codex PreToolUse for other tools: nothing sent');
     is(codex('SubagentStop', { agent_id => 'sub-1' }, name => 'codex SubagentStop'),
         undef, 'codex hooks the plugin does not use: nothing sent');
+}
+
+# ---------------------------------------------------------------------------
+# Why a session started: each agent's own word, passed on as given, and only
+# on session_start.
+
+{
+    my %agent = (claude => \&claude, codex => \&codex);
+    for my $name (sort keys %agent) {
+        my $run = $agent{$name};
+        # The values both agents document, and one only Claude Code sends.
+        for my $source (qw(startup resume clear compact fork)) {
+            my $event = $run->('SessionStart', { source => $source }, name => "$name SessionStart from $source");
+            is($event->{source}, $source, "$name SessionStart from $source: source passed on");
+        }
+
+        my $none = $run->('SessionStart', {}, name => "$name SessionStart without a source");
+        is($none->{event}, 'session_start', "$name SessionStart without a source: still sent");
+        ok(!exists $none->{source}, "$name SessionStart without a source: no source field");
+
+        my $odd = $run->('SessionStart', { source => "new\x07-thing\x{202E}" }, name => "$name SessionStart odd source");
+        is($odd->{source}, 'new-thing', "$name SessionStart: a source the plugin does not know is passed on, cleaned");
+
+        my $long = $run->('SessionStart', { source => 's' x 65 }, name => "$name SessionStart over-long source");
+        ok(!exists $long->{source}, "$name SessionStart: a source over 64 characters is dropped");
+
+        my $number = $run->('SessionStart', { source => 7 }, name => "$name SessionStart numeric source");
+        ok(!exists $number->{source}, "$name SessionStart: a source that is not text is dropped");
+
+        my $prompt = $run->('UserPromptSubmit', { prompt => 'hi', source => 'startup' }, name => "$name prompt with a source");
+        ok(!exists $prompt->{source}, "$name: only session_start carries source");
+    }
+
+    # When the line is too long, the project name goes before the source.
+    my $deep = '/' . ("\x{1F680}" x 1000);
+    my $big = claude(
+        'SessionStart',
+        { cwd => $deep, session_id => 's' x 128, source => 'resume' },
+        env  => { FLASH_CONSOLE_PANE => 'p' x 128 },
+        name => 'largest session_start'
+    );
+    is($big->{source}, 'resume', 'largest session_start: the source survives');
+    is($big->{cwd},    $deep,    'largest session_start: the working folder survives');
+    ok(!exists $big->{project}, 'largest session_start: the project name goes first');
 }
 
 # ---------------------------------------------------------------------------
