@@ -136,7 +136,9 @@ agent, never needs `jq`, and reads at most 1 MB of the agent's hook input.
 Each agent starts the hook through `flashteams-hook.sh`, which runs the Perl
 program with all output discarded and then exits 0 whatever Perl did. So
 when Perl cannot compile the program, lacks a module it needs, or is killed,
-the agent never sees a hook error.
+the agent never sees a hook error. The starter first turns off the shell
+options `errexit`, `nounset` and `xtrace`, which bash takes from an exported
+`SHELLOPTS`, so they cannot make it fail or print a trace.
 
 Every command in `hooks.json` starts the starter through a short guard:
 
@@ -270,11 +272,13 @@ inputs of several megabytes, and the quiet exits: no socket, a refused
 socket, a socket that never answers, a full socket queue, input that never
 ends, no Perl, a missing Perl module, a hook program that does not compile,
 dies, fails or is killed, a plugin folder that was deleted or lost its
-starter or its Perl program, and an unreadable starter.
+starter or its Perl program, an unreadable starter, and `errexit`, `nounset`
+and `xtrace` passed in through `SHELLOPTS` to bash running as `sh`.
 
-You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10)
-and ShellCheck, which also checks each command in `hooks.json` and the guard
-it runs.
+You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
+bash for the shell-option tests (they are skipped without it), and
+ShellCheck, which also checks each command in `hooks.json` and the guard it
+runs.
 
 Write comments, docs and messages in plain language, and do not use long
 dashes.

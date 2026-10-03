@@ -3,7 +3,8 @@
 # configuration, for every event both agents send, against a throwaway
 # socket that stands in for Flash Console, and checks what arrives: the JSON
 # line, the caps, the cleaning, the flags, and that the hook stays silent and
-# quick when Flash Console is not there and when the plugin folder has gone.
+# quick when Flash Console is not there, when the plugin folder has gone, and
+# when the shell comes with options already on.
 
 use strict;
 use warnings;
@@ -939,6 +940,78 @@ quiet('no socket', env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" },
             is($run->{data}, '', "$agent with an unreadable starter: nothing sent");
         }
         chmod(0644, "$locked/hooks/flashteams-hook.sh");
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Shell options the hook inherits. bash turns on every option an exported
+# SHELLOPTS names, also when it runs as sh, so errexit, nounset and xtrace
+# can reach the guard and the starter from the agent's environment. With
+# them on, the starter still exits 0, prints no trace, and sends the event.
+
+SKIP: {
+    my ($bash) = grep { -x } map { "$_/bash" } split(/:/, $ENV{PATH}), '/bin';
+    skip 'bash is not installed', 1 unless $bash;
+    my $bin = "$TMP/bash-as-sh";
+    make_path($bin);
+    symlink($bash, "$bin/sh") or die "$bin/sh: $!";
+    my $path = "$bin:$ENV{PATH}";
+
+    # A copy of the starter with a hook program that fails.
+    my $failing = "$TMP/failing-plugin";
+    make_path("$failing/hooks");
+    copy("$ROOT/shared/hooks/flashteams-hook.sh", "$failing/hooks/flashteams-hook.sh") or die $!;
+    write_file("$failing/hooks/flashteams-hook.pl", "exit 3;\n");
+
+    # bash as sh really takes the options, so the checks below mean something.
+    my $check = run_hook(
+        command  => ['sh', '-c', 'false; echo after'],
+        env      => { PATH => $path, SHELLOPTS => 'errexit:xtrace' },
+        listener => undef,
+    );
+    isnt($check->{status}, 0, 'bash as sh takes errexit from SHELLOPTS');
+    like($check->{stderr}, qr/^\+ false$/m, 'bash as sh takes xtrace from SHELLOPTS');
+
+    # The agent's own shell, which reads the hook command, is not the
+    # plugin's to quiet, so here it runs without the options and passes them
+    # to everything the command starts. (A shell that turned them off with
+    # set would also take them out of the SHELLOPTS its children get.)
+    my $agent_shell = sub {
+        my ($agent, $options, $root) = @_;
+        my ($command, $root_env) = agent_command($agent, 'Stop', $root);
+        return (
+            command  => [$command->[0], '-c', "exec env SHELLOPTS=$options $command->[2]"],
+            root_env => $root_env,
+        );
+    };
+
+    for my $options ('errexit:xtrace', 'errexit:nounset:xtrace') {
+        my %env = (PATH => $path, SHELLOPTS => $options);
+        for my $agent (qw(claude codex)) {
+            my %input = $agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT;
+            my %shell = $agent_shell->($agent, $options);
+            my $event = hook_event(command => $shell{command}, input => { %input, hook_event_name => 'Stop' },
+                env => { %PANE, PATH => $path, %{ $shell{root_env} } }, name => "$agent Stop with SHELLOPTS=$options");
+            is($event && $event->{event}, 'stop', "$agent Stop with SHELLOPTS=$options: sent");
+
+            # Hook commands written before the guard start the starter
+            # directly, with nothing to hide its stderr.
+            my $direct = hook_event(
+                command => ['sh', "$PLUGIN{$agent}/hooks/flashteams-hook.sh", $agent, 'Stop'],
+                input   => { %input, hook_event_name => 'Stop' },
+                env     => { %PANE, %env },
+                name    => "$agent starter run directly with SHELLOPTS=$options",
+            );
+            is($direct && $direct->{event}, 'stop', "$agent starter run directly with SHELLOPTS=$options: sent");
+
+            my %gone = $agent_shell->($agent, $options, "$TMP/deleted-plugin");
+            quiet("$agent with a deleted plugin folder and SHELLOPTS=$options", command => $gone{command},
+                env => { PATH => $path, %{ $gone{root_env} } }, listener => $LISTENER);
+        }
+        quiet("a failing hook program with SHELLOPTS=$options",
+            command => ['sh', "$failing/hooks/flashteams-hook.sh", 'claude', 'Stop'], env => \%env, listener => $LISTENER);
+        quiet("the starter without arguments with SHELLOPTS=$options",
+            command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh"], env => \%env, listener => $LISTENER);
     }
 }
 
