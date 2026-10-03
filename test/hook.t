@@ -9,6 +9,7 @@ use warnings;
 use utf8;
 
 use Cwd qw(abs_path);
+use File::Copy qw(copy);
 use File::Path qw(make_path);
 use File::Temp qw(tempdir);
 use FindBin;
@@ -56,6 +57,14 @@ my $CWD = "$PROJECT/src";
 
 my $LISTENER = listen_on($SOCKET);
 
+sub write_file {
+    my ($path, $text) = @_;
+    open(my $fh, '>', $path) or die "$path: $!";
+    print $fh $text;
+    close($fh) or die "$path: $!";
+    return;
+}
+
 sub listen_on {
     my ($path, $backlog) = @_;
     unlink($path);
@@ -71,8 +80,8 @@ sub listen_on {
 # Runs one hook. Options: agent, hook, input (a hash is encoded as JSON),
 # env (undef removes a variable), command (instead of the agent's hooks
 # command), listener (undef for none), keep_stdin_open, ascii.
-# Returns exit status, stdout, stderr, the bytes the listener received, and
-# how long the hook ran.
+# Returns exit status (or "signal N" when a signal ended it), stdout, stderr,
+# the bytes the listener received, and how long the hook ran.
 sub run_hook {
     my (%opt) = @_;
     my $agent = $opt{agent} // 'claude';
@@ -118,7 +127,7 @@ sub run_hook {
 
     while (time < $deadline) {
         if (!defined $ended && waitpid($pid, WNOHANG) == $pid) {
-            $status = $? >> 8;
+            $status = $? & 127 ? 'signal ' . ($? & 127) : $? >> 8;
             $ended = time;
             $finish_stdin->();
         }
@@ -752,6 +761,55 @@ quiet('no socket', env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" },
         listener => $LISTENER,
     );
     is($run->{data}, '', 'no Perl: nothing sent');
+}
+
+# A hook program that cannot run: the starter still exits 0 and says
+# nothing, so the agent never shows a hook error. Each program runs from a
+# throwaway copy of the starter, never by changing the real files.
+{
+    my %programs = (
+        'a hook program that does not compile' => "use strict;\nmy \$broken = (;\n",
+        'a hook program that dies'              => "die qq{the hook broke\\n};\n",
+        'a hook program that exits non-zero'    => "print qq{noise\\n};\nprint STDERR qq{trouble\\n};\nexit 3;\n",
+        'a hook program killed by a signal'     => "kill 'KILL', \$\$;\nsleep 5;\n",
+    );
+    my $n = 0;
+    for my $name (sort keys %programs) {
+        my $dir = "$TMP/broken-" . ++$n . '/hooks';
+        make_path($dir);
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$dir/flashteams-hook.sh") or die $!;
+        write_file("$dir/flashteams-hook.pl", $programs{$name});
+
+        my $direct = run_hook(command => ['perl', "$dir/flashteams-hook.pl", 'claude', 'Stop'], listener => undef);
+        isnt($direct->{status}, 0, "$name: really fails when Perl runs it directly");
+
+        my $run = quiet($name, command => ['sh', "$dir/flashteams-hook.sh", 'claude', 'Stop'], listener => $LISTENER);
+        is($run->{data}, '', "$name: nothing sent");
+    }
+}
+
+# A Perl without a module the program needs. PERL5LIB puts a stand-in for
+# JSON::PP first in Perl's search path, and loading it fails exactly the way
+# a missing module does.
+{
+    my $lib = "$TMP/perl-without-json-pp";
+    make_path("$lib/JSON");
+    write_file("$lib/JSON/PP.pm", "die qq{Can't locate JSON/PP.pm in \\\@INC (a stand-in for a missing module)\\n};\n");
+
+    my $direct = run_hook(command => ['perl', $HOOK_PL, 'claude', 'Stop'], env => { PERL5LIB => $lib },
+        input => { %CLAUDE_INPUT, hook_event_name => 'Stop' }, listener => undef);
+    isnt($direct->{status}, 0, 'a missing module: Perl alone fails');
+    like($direct->{stderr}, qr/Can't locate JSON\/PP\.pm/, 'a missing module: Perl alone complains');
+
+    for my $agent (qw(claude codex)) {
+        my $run = quiet(
+            "$agent with a missing module",
+            env      => { PERL5LIB => $lib },
+            command  => ['sh', "$PLUGIN{$agent}/hooks/flashteams-hook.sh", $agent, 'Stop'],
+            listener => $LISTENER,
+        );
+        is($run->{data}, '', "$agent with a missing module: nothing sent");
+    }
 }
 
 # ---------------------------------------------------------------------------

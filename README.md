@@ -17,7 +17,8 @@ The plugin adds three things to the agent:
   your own computer.
 
 It works on macOS and Linux. The hooks need Perl, which comes with macOS.
-Without Perl, or without Flash Console running, they quietly do nothing.
+Without Perl, with a Perl that cannot run them, or without Flash Console
+running, they quietly do nothing.
 
 ## Install
 
@@ -132,6 +133,11 @@ socket is missing, refused or slow, the hook gives up after 200 ms and exits
 0 without a word. It never writes to stdout or the terminal, never blocks the
 agent, never needs `jq`, and reads at most 1 MB of the agent's hook input.
 
+Each agent starts the hook through `flashteams-hook.sh`, which runs the Perl
+program with all output discarded and then exits 0 whatever Perl did. So
+when Perl cannot compile the program, lacks a module it needs, or is killed,
+the agent never sees a hook error.
+
 ### Fields
 
 Only `event` is required. Fields with nothing to say are left out.
@@ -232,8 +238,9 @@ agents, against a throwaway socket. They check the JSON lines, the caps,
 control-character removal, the `subagent` and `interrupted` flags, that Codex
 never sends `pane`, that nothing reaches stdout, the 8192-byte limit, inputs
 of several megabytes, and the quiet exits: no socket, a refused socket, a
-socket that never answers, a full socket queue, input that never ends, and no
-Perl.
+socket that never answers, a full socket queue, input that never ends, no
+Perl, a missing Perl module, and a hook program that does not compile, dies,
+fails or is killed.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10)
 and ShellCheck.
