@@ -1,0 +1,2 @@
+# Scripts run with sh and perl, which need Unix line endings.
+* text=auto eol=lf

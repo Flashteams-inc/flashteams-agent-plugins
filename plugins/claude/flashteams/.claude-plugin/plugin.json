@@ -1,0 +1,14 @@
+{
+  "name": "flashteams",
+  "displayName": "FlashTeams",
+  "version": "1.0.0",
+  "description": "Connects Claude Code to FlashTeams: the FlashTeams MCP server, a skill for working your next task, and hooks that tell Flash Console what Claude Code is doing.",
+  "author": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "homepage": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "repository": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "license": "MIT",
+  "keywords": ["flashteams", "flash-console", "tasks", "mcp"]
+}

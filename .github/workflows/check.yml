@@ -1,0 +1,28 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ShellCheck
+        if: runner.os == 'macOS'
+        run: command -v shellcheck || brew install shellcheck
+      - name: Show tool versions
+        run: |
+          perl -v | sed -n 2p
+          shellcheck --version | sed -n 2p
+      - name: Run every check
+        run: script/check

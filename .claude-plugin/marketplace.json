@@ -1,0 +1,16 @@
+{
+  "name": "flashteams",
+  "description": "FlashTeams for Claude Code: your FlashTeams tasks and projects, and live agent status in Flash Console.",
+  "owner": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "plugins": [
+    {
+      "name": "flashteams",
+      "source": "./plugins/claude/flashteams",
+      "description": "Connects Claude Code to FlashTeams and tells Flash Console what Claude Code is doing.",
+      "category": "productivity"
+    }
+  ]
+}

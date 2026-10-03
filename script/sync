@@ -1,0 +1,13 @@
+#!/bin/sh
+# Copies the files both plugins share from shared/ into each plugin folder.
+# Edit them in shared/, then run this. script/check fails when a copy is
+# out of date.
+set -eu
+cd "$(dirname "$0")/.."
+
+for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
+  mkdir -p "$plugin/hooks" "$plugin/skills/flashteams-next-task"
+  cp shared/hooks/flashteams-hook.pl shared/hooks/flashteams-hook.sh "$plugin/hooks/"
+  cp shared/skills/flashteams-next-task/SKILL.md "$plugin/skills/flashteams-next-task/"
+done
+echo "Copied shared/ into both plugins."

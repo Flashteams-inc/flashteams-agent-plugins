@@ -1,0 +1,20 @@
+{
+  "name": "flashteams",
+  "interface": {
+    "displayName": "FlashTeams"
+  },
+  "plugins": [
+    {
+      "name": "flashteams",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex/flashteams"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

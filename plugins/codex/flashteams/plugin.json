@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flashteams",
+  "version": "1.0.0",
+  "description": "Connects Codex to FlashTeams: the FlashTeams MCP server, a skill for working your next task, and hooks that tell Flash Console what Codex is doing.",
+  "author": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "homepage": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "repository": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "license": "MIT",
+  "keywords": ["flashteams", "flash-console", "tasks", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "interface": {
+        "displayName": "FlashTeams",
+        "shortDescription": "Your FlashTeams tasks, and Codex status in Flash Console",
+        "longDescription": "Adds the FlashTeams MCP server and a skill for working your next FlashTeams task, and tells Flash Console when Codex is working, needs you or is done.",
+        "developerName": "FlashTeams",
+        "category": "Productivity",
+        "websiteURL": "https://flashteams.ai",
+        "defaultPrompt": [
+          "Use FlashTeams to pick up my next task."
+        ]
+      }
+    }
+  }
+}

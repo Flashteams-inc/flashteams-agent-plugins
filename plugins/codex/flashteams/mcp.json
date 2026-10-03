@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "flashteams": {
+      "type": "streamable-http",
+      "url": "https://flashteams-mcp-server.nisitha.workers.dev/mcp"
+    }
+  }
+}
