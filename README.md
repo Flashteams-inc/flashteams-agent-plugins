@@ -128,9 +128,10 @@ flashteams.exe --hook <agent> <hook-event>
 
 The program is found in `%FLASH_CONSOLE_BIN%`, which Flash Console sets in
 every shell it starts, else in `%LOCALAPPDATA%\Flash Console\bin`, and only
-by a full path, so a folder named relative to where the agent works is never
-used. When it is not there, Flash Console is not installed, and the hooks
-quietly do nothing.
+by a full path on this PC, so a folder named relative to where the agent
+works, or one on another computer (`\\server\share\...`), is never used.
+When it is not there, Flash Console is not installed, and the hooks quietly
+do nothing.
 
 - **Claude Code** needs Git for Windows. Claude Code runs its hook commands
   in Git Bash when it finds it, and the starter then runs `flashteams.exe`.
@@ -269,7 +270,9 @@ socket owned by the person running it.
 On Windows, a named pipe that Flash Console creates when it starts and that
 goes away when it quits, crash included:
 
-1. `%FLASH_CONSOLE_AGENT_SOCKET%`, when it starts with `\\.\pipe\`;
+1. `%FLASH_CONSOLE_AGENT_SOCKET%`, when it is `\\.\pipe\` and then a name
+   alone: no `\` or `/` in it, and not `.` or `..`, since Windows would
+   otherwise read the rest as a path that leaves the pipes;
 2. else `\\.\pipe\flash-console-agent-<SID>`, where `<SID>` is the
    person's security identifier in its usual text form, such as
    `S-1-5-21-1004336348-1177238915-682003330-1001`: the `TokenUser` of the
@@ -280,8 +283,16 @@ Flash Console creates the pipe with the person's SID as its owner and as the
 only one let in (`O:<SID>D:P(A;;GA;;;<SID>)`), with
 `FILE_FLAG_FIRST_PIPE_INSTANCE`, so it fails when anyone else already holds
 the name, and `PIPE_REJECT_REMOTE_CLIENTS`. A client connects with
-`SECURITY_IDENTIFICATION` and sends nothing unless the pipe's owner is its
-own SID. The lines on the pipe are the same as on the socket.
+`SECURITY_IDENTIFICATION` and sends nothing unless what it opened is a pipe
+(`GetFileType` gives `FILE_TYPE_PIPE`, as the hook on a Mac checks it
+found a socket) and the pipe's owner is its own SID. The owner alone does not
+show the pipe is Flash Console's: a program of the same person running in a
+sandbox with a restricted token could make the pipe first while Flash
+Console is closed, and it would carry the same owner. So the client also
+checks the process serving the pipe (`GetNamedPipeServerProcessId`): its
+token's user is the same SID, it is not a restricted token, and its
+integrity is medium or higher. Anything it cannot check counts as not Flash
+Console. The lines on the pipe are the same as on the socket.
 
 ### How
 
@@ -521,10 +532,13 @@ the starter is given, `flashteams-permission` included. Flash Console's
 `flashteams-hook.pl` does over the socket: the same events and fields, the
 same cleaning, excerpts and 8192-byte limit, the same briefing request,
 cutting at 10,000 UTF-16 units and note after a refusal, the same waits
-(200 ms for a status event, 1.5 seconds for the briefing, 3.3 seconds in
-all), and for Claude Code the same permission check, which never opens the
-pipe, with the full path it accepts taken from its own location in place of
-`$HOME/Library/...`. The program:
+(200 ms for a status event, 1.5 seconds for the briefing, 1.8 seconds for
+the whole run, or 3.3 at a session start), and for Claude Code the same
+permission check, which never opens the pipe. The full path that check
+accepts is the program's own, as Windows writes it, such as
+`C:\Users\me\AppData\Local\Flash Console\bin\flashteams.exe`, in place of
+`$HOME/Library/...`; it holds backslashes, so only its single-quoted form
+passes, as the rules above say. The program:
 
 - exits 0 and writes nothing on stderr, whatever happens;
 - prints on stdout only the one briefing object, for `SessionStart`, or
@@ -533,7 +547,14 @@ pipe, with the full path it accepts taken from its own location in place of
   as a `\uXXXX` escape, so that no code page and no PowerShell can change
   it;
 - takes the working folder in Windows' own form, such as
-  `C:\Users\me\app`, for `cwd` and `project`.
+  `C:\Users\me\app`, for `cwd` and `project`;
+- sends as `plugin_version` the `version` in the plugin's own manifest,
+  `.claude-plugin/plugin.json` or `.codex-plugin/plugin.json` in the
+  folder named by `CLAUDE_PLUGIN_ROOT`, else `PLUGIN_ROOT`. Both agents set
+  these for every hook (Claude Code in Git Bash writes the folder with
+  slashes, such as `C:/Users/me/...`). The field is left out when the
+  manifest cannot be read. On a Mac the version is the Perl program's own,
+  which `test/manifests.t` keeps equal to the manifests'.
 
 The starter in Git Bash checks the program's answer as it checks Perl's: it
 passes on only one line that starts `{"hookSpecificOutput":{` and ends
@@ -604,8 +625,14 @@ Claude Code plugin ships `bin/flashteams`, a short `sh` script that runs
 `${FLASH_CONSOLE_BIN:-$HOME/Library/Application Support/Flash Console/bin}/flashteams`
 with every argument. On Windows, where the Bash tool is Git Bash, it runs
 `flashteams.exe` from `%FLASH_CONSOLE_BIN%`, else from
-`%LOCALAPPDATA%\Flash Console\bin`, either written with backslashes. When
-that file is not there it prints
+`%LOCALAPPDATA%\Flash Console\bin`, either written with backslashes. Git
+Bash rewrites an argument that looks like a Unix path, such as
+`/src/main.rs` or `--path=/src`, into a Windows path when it starts a
+Windows program, so there the shim first sets `MSYS_NO_PATHCONV=1` (Git
+for Windows) and `MSYS2_ARG_CONV_EXCL=*` (MSYS2), and every argument
+arrives as written. A Git Bash shell that finds `flashteams.exe` on its
+`PATH` directly has the same rewriting. When that file is not there it
+prints
 `Flash Console is not running or is too old to provide the flashteams command.`
 and exits 3. Codex has no such folder, and finds the command on the `PATH`
 Flash Console sets.
@@ -719,11 +746,12 @@ it on Windows, with `OS` set to `Windows_NT`, against a stand-in
 `flashteams.exe`, and checks that the stand-in is started as
 `flashteams.exe --hook <agent> <hook-event>` from `FLASH_CONSOLE_BIN` or
 `%LOCALAPPDATA%`, written with backslashes or a drive letter, and never
-from a relative folder; that it gets the agent's input byte for byte; that
-only one whole briefing or the exact allow answer reaches the agent; that a
-missing, broken, killed or older program leaves the agent nothing; that
-Perl and the socket are never touched; that `$(exit 0)` does nothing in
-`sh`, `bash`, `dash`, `zsh` and `ksh`; and the same shell options as above.
+from a relative folder or another computer; that it gets the agent's
+input byte for byte; that only one whole briefing or the exact allow
+answer reaches the agent; that a missing, broken, killed or older program
+leaves the agent nothing; that Perl and the socket are never touched; that
+`$(exit 0)` does nothing in `sh`, `bash`, `dash`, `zsh` and `ksh`; and the
+same shell options as above.
 Where `pwsh` is installed, as on GitHub's runners, it also has PowerShell
 parse every Windows command, runs Claude Code's commands as Claude Code
 runs them without Git Bash and checks they stop at `$(exit 0)`, and runs
