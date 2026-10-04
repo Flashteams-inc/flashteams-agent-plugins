@@ -33,6 +33,9 @@ flashteams update_task --task_id <task id> --action start
   JSON. `--json '{...}'` passes all the arguments at once.
 - `--output json` prints the whole answer as JSON.
 - If `flashteams` is not found, run the full path the briefing gives.
+- Read each answer. A tool can turn a request down in its answer, for
+  example with `"success": false` and a message, and the command still
+  exits 0.
 
 ## Long text
 
@@ -47,12 +50,19 @@ how to check it works, and anything to watch out for.
 EOF
 ```
 
+Flash Console limits how long one command can be, text from standard input
+included. If it says the request is too long, shorten the text, or send it
+in parts, for example as several pieces of evidence.
+
 ## The working loop
 
 1. `connect_workspace` to the project, then `load_project`.
 2. `load_task`, and read `prior_knowledge` first. Never repeat an
    experiment it marks as failed. Only work a task assigned to you, unless
-   the person tells you to take it over.
+   the person tells you to take it over. `load_task` finds only tasks in
+   the connected project: for the task chosen in Flash Console, connect to
+   the project the briefing names, and if it names none, ask the person
+   which project it is in rather than trying projects one by one.
 3. `update_task --action start` before you change anything, so the time
    you spend is measured.
 4. Do the work, and run the project's checks.
@@ -66,6 +76,11 @@ Pass it only when that time is wrong, for example when the task sat
 started while nobody worked on it, and then give the real time worked,
 never an estimate.
 
+Ask the person before you run `complete_project`, `complete_phase` or
+`respond_to_approval`, unless they already told you to. The first two
+close work for the whole team, and the last decides for a FlashBrain run;
+none is easy to undo.
+
 ## When a command fails
 
 The error is one line on stderr, written for the person. The exit code
@@ -73,12 +88,28 @@ says what kind of failure it is:
 
 | Exit | Meaning | What to do |
 | :- | :- | :- |
-| 0 | Done. | |
+| 0 | Done. | Read the answer: the tool may still have said no in it. |
 | 1 | FlashTeams or the tool said no, or the person declined. | Read the message. Do not repeat the same call unchanged. |
-| 2 | The command was wrong. | Check `flashteams help <tool>`. |
-| 3 | Flash Console is not running, is too old, or a sandbox blocked it. | Tell the person. See below for sandboxes. |
+| 2 | The command was wrong, or too long. | Check `flashteams help <tool>`, or shorten the text. |
+| 3 | Flash Console is not running, is too old, or a sandbox blocked it. | If the briefing gave the command's full path, run the same command once with that path in place of `flashteams`. If that fails too, tell the person. See below for sandboxes. |
 | 4 | FlashTeams for agents is off or read only in Flash Console, or nobody is signed in. | Tell the person what the message says. Do not work around it. |
-| 5 | It took too long, Flash Console was busy, or the network failed. | Wait a moment and try once more. |
+| 5 | Flash Console was busy, it took too long, or the network failed. | See below. Never repeat a change before checking it did not happen. |
+
+After exit 5:
+
+- **Busy**, when the message says Flash Console or FlashBrain is already
+  answering, or too many calls were made: nothing ran. Wait a little and
+  run it again.
+- **A tool that only reads:** run it once more.
+- **A tool that changes FlashTeams**, such as `update_task`,
+  `create_task` or `graph_action`: the change may have been made before
+  the time ran out. Check first with a read (`load_task`, `find_tasks`,
+  `get_events` or `get_findings`) and run it again only if the change is
+  not there.
+- **`ask_flashbrain` that took too long:** never ask again, which would
+  start a second, paid run. The first run carries on. Check
+  `list_pending_approvals`, and `get_flashbrain_answer` with the
+  `session_id` if you have one.
 
 ## Sandboxes
 
@@ -90,4 +121,6 @@ computer, which an agent's sandbox can block. The message then says so.
 - **Claude Code:** the person adds the Flash Console socket to
   `sandbox.network.allowUnixSockets` in their settings.
 
-Never try to reach FlashTeams another way, and never ask for a token.
+Never ask for a FlashTeams token or handle one. Use the `flashteams`
+command, or the FlashTeams MCP tools when the optional `flashteams-mcp`
+plugin gives you them.

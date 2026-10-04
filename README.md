@@ -363,17 +363,19 @@ flashteams help <tool>                # a tool's arguments and an example
 flashteams <tool> --<argument> <value> [--json '<object>'] [--output json]
 ```
 
-A value of `-` reads that argument from standard input. Errors are one line
-on stderr, and the exit code says what kind:
+A value of `-` reads that argument from standard input. Flash Console
+limits how long one request can be, text from standard input included, and
+says so when a request is too long. Errors are one line on stderr, and the
+exit code says what kind:
 
 | Exit | Meaning |
 | :- | :- |
-| 0 | Done. |
+| 0 | Done. The tool's answer can still turn the request down, for example with `"success": false`. |
 | 1 | FlashTeams or the tool said no, or the person declined. |
-| 2 | The command was wrong. |
+| 2 | The command was wrong, or too long for Flash Console. |
 | 3 | Flash Console is not running or is too old, or a sandbox blocked the socket. |
 | 4 | FlashTeams for agents is off or read only, or nobody is signed in. |
-| 5 | Timed out, busy, or the network failed. |
+| 5 | Timed out, busy, or the network failed. A change that timed out may still have been made, so the skill has the agent check with a read before trying again, and never ask FlashBrain the same question twice. |
 
 Claude Code puts a plugin's `bin` folder on its Bash tool's `PATH`, so the
 Claude Code plugin ships `bin/flashteams`, a short `sh` script that runs
@@ -413,10 +415,20 @@ test/                               tests
 
 Each plugin keeps its own copy of the shared files because each agent
 installs a plugin folder on its own. Each agent's plugins are separate from
-the other agent's so neither agent loads the other's manifest. Claude
-Code's copy of the `flashteams` skill adds one line to the frontmatter,
-`allowed-tools: Bash(flashteams:*)`, so the skill can run the command
-without asking each time; Codex does not read that field.
+the other agent's so neither agent loads the other's manifest.
+
+Claude Code's copy of the `flashteams` skill adds one line to the
+frontmatter, `allowed-tools`, which lets the skill run without asking each
+time `flashteams tools`, `flashteams help` and the tools that only read,
+such as `find_tasks`, `load_task` and `query_codebase` (the list is in
+`script/sync`). Every command that changes FlashTeams, such as
+`update_task`, `complete_project`, `respond_to_approval` or
+`ask_flashbrain`, goes through Claude Code's usual permission prompt, as
+the same tool did over MCP, and so does any tool missing from the list.
+Answer the prompt with "don't ask again" for the commands you are happy to
+let run. Codex does not read that field; it asks before running the
+command outside its sandbox. The skill also tells both agents to ask you
+before `complete_project`, `complete_phase` or `respond_to_approval`.
 
 The Codex plugins use the `.codex-plugin/plugin.json` layout on purpose.
 Codex also reads a newer layout with `plugin.json` and `mcp.json` at the
@@ -460,12 +472,14 @@ For the briefing, the throwaway socket also stands in for Flash Console's
 answer: at once, after a second, in pieces, too late, never, by closing
 without a word as an older Flash Console does, and with answers that are
 wrong in every way listed above. The tests check the request, the one line
-printed, the text's cleaning and cutting, that nothing is printed on any
-failure, that the 1.5 second wait is honoured, that no other hook asks or
-prints, and that the starter passes on nothing but one whole briefing from a
-Perl program that finished well. `test/bin.t` runs the Claude Code shim
-against a stand-in `flashteams` command, and `test/manifests.t` checks both
-marketplaces, all four plugins and the skills.
+printed, the text's cleaning and cutting (in UTF-16 units, with emoji), the
+short note after a refusal, that nothing is printed on any other failure,
+that the 1.5 second wait is honoured, that no other hook asks or prints,
+and that the starter passes on nothing but one whole briefing from a Perl
+program that finished well. `test/bin.t` runs the Claude Code shim against
+a stand-in `flashteams` command, and `test/manifests.t` checks both
+marketplaces, all four plugins and the skills, including that Claude Code's
+`allowed-tools` lets no command that changes FlashTeams run without asking.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
 bash for the shell-option tests (they are skipped without it), and

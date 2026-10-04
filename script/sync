@@ -4,11 +4,34 @@
 # out of date.
 #
 # The flashteams skill is the same for both agents, except that Claude
-# Code's copy also lets the skill run the flashteams command without asking
-# each time (allowed-tools), a field Codex does not read. Only Claude Code
-# puts a plugin's bin folder on its PATH, so only it gets the shim.
+# Code's copy adds allowed-tools, a field Codex does not read. It lets the
+# skill run, without asking each time, the flashteams commands that only
+# read: tools, help, and the tools below. Every command that changes
+# FlashTeams, such as update_task, complete_project or ask_flashbrain, goes
+# through Claude Code's usual permission prompt, as the same tool did over
+# MCP, and so does a tool missing from this list. Only Claude Code puts a
+# plugin's bin folder on its PATH, so only it gets the shim.
 set -eu
 cd "$(dirname "$0")/.."
+
+# FlashTeams tools that only read, or only choose what this session works
+# on (connect_workspace, connect_program). get_flashbrain_answer is left out
+# because it can restart a paused FlashBrain run, and documentation because
+# the same tool also edits documents.
+READ_TOOLS="tools help
+list_my_projects connect_workspace find_tasks load_task load_project search get_events
+list_programs connect_program program_documents list_products
+code_map query_codebase read_source read_docs resolve_code_name
+search_recipes learn_recipe run_recipe get_findings find_experts
+list_pending_approvals list_org_members get_followups
+get_deadlines get_executive_summary get_person_activity get_person_workload
+get_portfolio_health get_project_health get_team_capacity get_team_utilization
+get_time_logs get_time_off"
+
+allowed=""
+for tool in $READ_TOOLS; do
+  allowed="${allowed:+$allowed, }Bash(flashteams $tool:*)"
+done
 
 for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
   mkdir -p "$plugin/hooks" "$plugin/skills/flashteams"
@@ -19,7 +42,7 @@ done
 mkdir -p plugins/claude/flashteams/bin
 cp shared/bin/flashteams plugins/claude/flashteams/bin/
 chmod 755 plugins/claude/flashteams/bin/flashteams
-perl -pi -e 'print "allowed-tools: Bash(flashteams:*)\n" if $_ eq "---\n" && ++$fences == 2' \
+ALLOWED_TOOLS="$allowed" perl -pi -e 'print "allowed-tools: $ENV{ALLOWED_TOOLS}\n" if $_ eq "---\n" && ++$fences == 2' \
   plugins/claude/flashteams/skills/flashteams/SKILL.md
 
 for plugin in plugins/claude/flashteams-mcp plugins/codex/flashteams-mcp; do

@@ -269,18 +269,47 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
 }
 
 # The flashteams skill: Codex's copy is shared/ as it is, and Claude Code's
-# adds one frontmatter line that lets the skill run the flashteams command
-# without asking each time.
+# adds one frontmatter line, allowed-tools, that lets the skill run the
+# flashteams commands that only read without asking each time. Every
+# command that changes FlashTeams keeps Claude Code's permission prompt, as
+# the same tool had over MCP.
 {
     my $skill = 'skills/flashteams/SKILL.md';
     my $shared = slurp("shared/$skill");
     is(slurp("$CODEX/$skill"), $shared, "$CODEX/$skill matches shared/$skill (run script/sync)");
-    (my $claude = $shared) =~ s/\A(---\n.*?\n)(---\n)/$1allowed-tools: Bash(flashteams:*)\n$2/s;
-    is(slurp("$CLAUDE/$skill"), $claude,
-        "$CLAUDE/$skill is shared/$skill with allowed-tools added (run script/sync)");
-    like(slurp("$CLAUDE/$skill"), qr/\A---\n(?:[^\n]+\n)*allowed-tools: Bash\(flashteams:\*\)\n---\n/,
-        'the Claude Code skill may run the flashteams command');
     unlike($shared, qr/allowed-tools/, 'the Codex skill has no Claude Code field');
+
+    my $copy = slurp("$CLAUDE/$skill");
+    my ($line) = $copy =~ /\A---\n(?:[^\n]+\n)*?allowed-tools: ([^\n]*)\n(?:[^\n]+\n)*?---\n/;
+    ok(defined $line, 'the Claude Code skill has allowed-tools in its frontmatter');
+    (my $claude = $shared) =~ s/\A(---\n.*?\n)(---\n)/$1allowed-tools: @{[ $line \/\/ '' ]}\n$2/s;
+    is($copy, $claude, "$CLAUDE/$skill is shared/$skill with allowed-tools added (run script/sync)");
+
+    my @entries = split(/, /, $line // '');
+    my @names = map { /\ABash\(flashteams ([a-z_]+):\*\)\z/ ? $1 : "<$_>" } @entries;
+    is(scalar(grep { /\A</ } @names), 0, 'each allowed tool is Bash(flashteams <name>:*)') or diag("@names");
+    my %allowed = map { $_ => 1 } @names;
+    is(scalar(keys %allowed), scalar(@names), 'no allowed tool twice');
+    ok(!grep({ $_ eq 'Bash(flashteams:*)' || $_ eq 'Bash(flashteams *)' } @entries),
+        'the Claude Code skill does not allow every flashteams command');
+
+    # Without asking: listing the tools, reading their help, and the tools
+    # the working loop reads with.
+    ok($allowed{$_}, "the Claude Code skill runs flashteams $_ without asking")
+      for qw(tools help list_my_projects connect_workspace find_tasks load_task load_project query_codebase
+             read_docs read_source);
+
+    # Never without asking: every FlashTeams tool that changes something,
+    # starts paid work or decides for the person, and the tools that do
+    # that as well as read.
+    my @changes = qw(update_task create_task graph_action complete_phase complete_project activate_next_project
+                     create_program_project ask_flashbrain get_flashbrain_answer respond_to_approval documentation
+                     propose_recipe record_recipe_use record_openrewrite_run);
+    for my $tool (@changes) {
+        ok(!$allowed{$tool}, "flashteams $tool keeps Claude Code's permission prompt");
+        my @prefix = grep { index($tool, $_) == 0 } keys %allowed;
+        is("@prefix", '', "no allowed name starts flashteams $tool");
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -321,6 +350,27 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     like($skill, qr/sandbox/i,                       'the flashteams skill explains the sandbox');
     like($skill, qr/allowUnixSockets/,               'the flashteams skill names Claude Code\'s socket setting');
     like($skill, qr/^\| $_ \|/m, "the flashteams skill explains exit code $_") for 0 .. 5;
+
+    # Exit 0 can still carry a refusal; exit 3 tries the briefing's path
+    # once; after exit 5 a change is checked before it is repeated, and
+    # FlashBrain is never asked twice.
+    like($skill, qr/^\| 0 \|[^\n]*said no/m,             'exit 0: the answer may still say no');
+    like($skill, qr/^\| 3 \|[^\n]*full path[^\n]*once/m, 'exit 3: the briefing\'s full path, once');
+    like($skill, qr/Check first with a read/,           'exit 5: a change is checked before it is repeated');
+    like($skill, qr/`ask_flashbrain` that took too long:\*\* never ask again/, 'exit 5: FlashBrain is never asked twice');
+    like($skill, qr/list_pending_approvals/,            'exit 5: a slow FlashBrain run is looked up');
+    unlike($skill, qr/Wait a moment and try once more/, 'exit 5: no blanket retry');
+
+    # The tools that close work or decide for the person are asked about.
+    like($skill, qr/Ask the person before you run `complete_project`, `complete_phase` or\s+`respond_to_approval`/,
+        'the flashteams skill asks before closing a project or phase, or answering an approval');
+
+    # The task chosen in Flash Console needs its project connected.
+    like($skill, qr/finds only tasks in\s+the connected project/, 'the flashteams skill connects the chosen task\'s project');
+
+    # The optional MCP plugin's tools are not forbidden.
+    like($skill, qr/FlashTeams MCP tools when the optional `flashteams-mcp`/, 'the MCP tools are allowed when installed');
+    unlike($skill, qr/Never try to reach FlashTeams another way/, 'no rule against the MCP plugin');
 }
 
 # ---------------------------------------------------------------------------
