@@ -2,21 +2,34 @@
 
 Plugins that connect Claude Code and Codex to FlashTeams. One repository
 serves both: a Claude Code marketplace and a Codex marketplace, each named
-`flashteams`, each with one plugin named `flashteams`.
+`flashteams`, each with two plugins.
 
-The plugin adds three things to the agent:
+**`flashteams`** works with Flash Console, the FlashTeams terminal, and
+needs no sign-in of its own. It gives the agent:
 
-- **The FlashTeams MCP server**, so the agent can find, read and update your
-  FlashTeams tasks and projects. You sign in with your own FlashTeams
-  account; the plugin holds no token.
-- **The `flashteams-next-task` skill**, which picks up your next task, starts
-  it, does the work and closes it with a plain-language handoff.
-- **Agent status for Flash Console.** Small hooks tell Flash Console when the
-  agent starts, is working, needs your permission or an answer, is done or
-  failed, so the agent's tab shows it. They talk only to Flash Console on
-  your own computer.
+- **Every FlashTeams tool, as the `flashteams` command.** Flash Console
+  provides the command and runs each tool with the FlashTeams sign-in you
+  already have in Flash Console, so the agent never holds a token. The
+  agent runs `flashteams tools` for the list and `flashteams help <tool>`
+  for a tool's arguments. Flash Console puts the command on the PATH of
+  every shell it starts; in Claude Code the plugin also puts it on the Bash
+  tool's PATH.
+- **A briefing when a session starts:** whose sign-in the command uses,
+  the task you chose in Flash Console, how to use the command, and how
+  FlashTeams expects agents to work. Nothing else is loaded up front; the
+  agent looks up projects and tasks with the tools when it needs them.
+- **The `flashteams` skill**, which teaches the agent the command and the
+  FlashTeams way of working a task.
+- **Agent status for Flash Console.** Small hooks tell Flash Console when
+  the agent starts, is working, needs your permission or an answer, is done
+  or failed, so the agent's tab shows it.
 
-It works on macOS and Linux. The hooks need Perl, which comes with macOS.
+**`flashteams-mcp`** is optional. It adds the FlashTeams MCP server, which
+you sign in to with your own FlashTeams account, and the
+`flashteams-next-task` skill that uses it. Use it for an agent outside
+Flash Console, or if you prefer MCP. You can install `flashteams` alone.
+
+The hooks work on macOS and Linux and need Perl, which comes with macOS.
 Without Perl, with a Perl that cannot run them, or without Flash Console
 running, they quietly do nothing.
 
@@ -27,6 +40,8 @@ running, they quietly do nothing.
 ```sh
 claude plugin marketplace add Flashteams-inc/flashteams-agent-plugins
 claude plugin install flashteams@flashteams
+# Optional: the MCP server
+claude plugin install flashteams-mcp@flashteams
 ```
 
 Start a new Claude Code session, or run `/reload-plugins` in an open one.
@@ -36,22 +51,42 @@ Start a new Claude Code session, or run `/reload-plugins` in an open one.
 ```sh
 codex plugin marketplace add Flashteams-inc/flashteams-agent-plugins
 codex plugin add flashteams@flashteams
+# Optional: the MCP server
+codex plugin add flashteams-mcp@flashteams
 ```
 
 Start a new Codex session. Then trust the hooks, as below.
 
-## Sign in to FlashTeams the first time
+## Sign in
 
-- **Claude Code:** in a session, run `/mcp`, choose `flashteams`, then
-  **Authenticate**. Your browser opens; sign in with your FlashTeams account.
-- **Codex:** run `codex mcp login flashteams` and sign in in the browser.
+- **`flashteams`:** sign in to FlashTeams in Flash Console. There is
+  nothing to sign in to in the agent. Flash Console's Settings, under
+  Agents, decides what agents may do with FlashTeams: nothing, read only,
+  or read and update.
+- **`flashteams-mcp`:** in Claude Code, run `/mcp`, choose `flashteams`,
+  then **Authenticate**, and sign in with your FlashTeams account in the
+  browser. In Codex, run `codex mcp login flashteams`.
+
+## Sandboxes
+
+The `flashteams` command reaches Flash Console through a private socket on
+your computer, and an agent's sandbox can block that. The command then
+says so and exits 3.
+
+- **Codex:** its default sandbox blocks the socket. Approve running
+  `flashteams` outside the sandbox when Codex asks.
+- **Claude Code:** with its sandbox on, add the Flash Console socket (see
+  [Where](#where)) to `sandbox.network.allowUnixSockets` in your settings.
+
+The hooks are not affected: both agents run hooks outside the sandbox.
 
 ## Trust the hooks in Codex
 
 Codex does not run a plugin's hooks until you have looked at them. After
 installing, start `codex`, run `/hooks`, review the FlashTeams hooks and
 trust them. Codex asks again if an update changes them. Until then Codex
-works as usual, but Flash Console does not see its status.
+works as usual, but Flash Console does not see its status and Codex gets
+no briefing.
 
 Claude Code needs no extra step: the hooks run once the plugin is enabled.
 
@@ -74,12 +109,18 @@ codex plugin add flashteams@flashteams
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
 
+**Coming from 1.0.0:** the MCP server moved from `flashteams` to the new
+`flashteams-mcp` plugin. Inside Flash Console the `flashteams` command does
+the same work without it. To keep the MCP server as well, install
+`flashteams-mcp` as above, and sign in to it again if the agent asks.
+
 ## Remove
 
 Claude Code:
 
 ```sh
 claude plugin uninstall flashteams@flashteams
+claude plugin uninstall flashteams-mcp@flashteams
 claude plugin marketplace remove flashteams
 ```
 
@@ -87,17 +128,19 @@ Codex:
 
 ```sh
 codex plugin remove flashteams@flashteams
+codex plugin remove flashteams-mcp@flashteams
 codex plugin marketplace remove flashteams
 ```
 
-To also sign out of FlashTeams: in Claude Code, `/mcp`, choose `flashteams`,
-then **Clear authentication**; in Codex, `codex mcp logout flashteams`.
+To also sign the MCP server out of FlashTeams: in Claude Code, `/mcp`,
+choose `flashteams`, then **Clear authentication**; in Codex,
+`codex mcp logout flashteams`.
 
 ## Privacy
 
-- The hooks send events only to Flash Console on this computer, through a
-  private socket in your own user folder that only you can open. Nothing
-  leaves the machine, and the hooks make no network connections.
+- The hooks talk only to Flash Console on this computer, through a private
+  socket in your own user folder that only you can open. The hooks make no
+  network connections.
 - When Flash Console is not running, nothing is sent and nothing is kept.
 - An event holds what Flash Console needs to show status: the agent, what
   happened, the session id, the working folder and its project name, the
@@ -105,14 +148,22 @@ then **Clear authentication**; in Codex, `codex mcp logout flashteams`.
   prompt, reply, question or tool input. Excerpts are at most 320
   characters, on one line, with control characters and invisible characters
   removed.
-- The hooks never print anything the agent would read, never write to your
-  terminal and never slow the agent down for more than a moment.
-- The MCP server is separate: the agent talks to FlashTeams with your own
-  account only when it uses a FlashTeams tool.
+- A briefing request holds the agent, the working folder, the pane and why
+  the session started.
+- The only thing the hooks ever print for the agent to read is the
+  briefing, once, when a session starts. They never write to your
+  terminal and never slow the agent down for more than a moment; a session
+  start waits at most a second and a half for the briefing.
+- The `flashteams` command talks only to Flash Console, which calls
+  FlashTeams with your sign-in. Your tokens stay in Flash Console; neither
+  the command nor the agent ever sees them.
+- The MCP server in `flashteams-mcp` is separate: the agent talks to
+  FlashTeams with your own account only when it uses a FlashTeams tool.
 
 ## The protocol (version 1)
 
-What the hooks send, for anyone building or checking the receiving side.
+What the hooks send and receive, for anyone building or checking the other
+side.
 
 ### Where
 
@@ -128,18 +179,22 @@ socket owned by the person running it.
 
 ### How
 
-The hook connects, writes one line, a single JSON object of at most 8192
-bytes ending in a newline, and closes. Flash Console does not reply. If the
-socket is missing, refused or slow, the hook gives up after 200 ms and exits
-0 without a word. It never writes to stdout or the terminal, never blocks the
-agent, never needs `jq`, and reads at most 1 MB of the agent's hook input.
+For a status event the hook connects, writes one line, a single JSON
+object of at most 8192 bytes ending in a newline, and closes. Flash Console
+does not reply. If the socket is missing, refused or slow, the hook gives up
+after 200 ms and exits 0 without a word. It never blocks the agent, never
+needs `jq`, and reads at most 1 MB of the agent's hook input.
+
+At a session start the hook then asks for the briefing on a second
+connection; see [The briefing](#the-briefing).
 
 Each agent starts the hook through `flashteams-hook.sh`, which runs the Perl
-program with all output discarded and then exits 0 whatever Perl did. So
-when Perl cannot compile the program, lacks a module it needs, or is killed,
-the agent never sees a hook error. The starter first turns off the shell
-options `errexit`, `nounset` and `xtrace`, which bash takes from an exported
-`SHELLOPTS`, so they cannot make it fail or print a trace.
+program with its stderr discarded, and its stdout too for every hook but
+the session start, and then exits 0 whatever Perl did. So when Perl cannot
+compile the program, lacks a module it needs, or is killed, the agent never
+sees a hook error. The starter first turns off the shell options `errexit`,
+`nounset` and `xtrace`, which bash takes from an exported `SHELLOPTS`, so
+they cannot make it fail or print a trace.
 
 Every command in `hooks.json` starts the starter through a short guard:
 
@@ -148,12 +203,18 @@ sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$
   sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude Stop
 ```
 
+The session start's guard keeps stdout, for the briefing:
+
+```sh
+sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" 2>/dev/null; exit 0' \
+  sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude SessionStart
+```
+
 Codex uses `${PLUGIN_ROOT}` in place of `${CLAUDE_PLUGIN_ROOT}`. When Codex
 updates the plugin, it deletes the old plugin folder but keeps running the
 hook commands it read earlier, which name files in that folder, and `sh` on a
 missing file prints an error and exits non-zero. The guard exits 0 without a
-word when the starter is missing or cannot be read, and discards anything
-the starter prints.
+word when the starter is missing or cannot be read.
 
 ### Fields
 
@@ -205,11 +266,69 @@ set. If a line would pass 8192 bytes, excerpts shorten and then go, then
 | `stop_failure` | `StopFailure`, with `error_type` and `error_message` | |
 | `idle_prompt` | `Notification` of type `idle_prompt` | |
 
+### The briefing
+
+At a session start, after the `session_start` event, the hook connects
+again and writes one request line:
+
+```json
+{"agent":"claude","cwd":"/Users/me/app","id":"9f86d081884c7d659a2feaa0c55ad015","op":"briefing","pane":"pane-42","source":"startup","v":1}
+```
+
+| Field | Meaning |
+| :- | :- |
+| `v` | Protocol version, `1`. |
+| `op` | `briefing`. |
+| `id` | 32 random hex digits, new for each request. |
+| `agent` | `claude` or `codex`. |
+| `cwd` | The agent's working folder, or the hook's own when the agent gave none. |
+| `pane` | `FLASH_CONSOLE_PANE` for Claude Code; always empty for Codex, for the reason under [The environment Flash Console sets](#the-environment-flash-console-sets). |
+| `source` | Why the session started, as on `session_start`; left out when the agent gave none. |
+
+Flash Console answers with one line on the same connection, at most 1 MiB:
+
+```json
+{"v":1,"id":"9f86d081884c7d659a2feaa0c55ad015","ok":true,"text":"FlashTeams is available in this session..."}
+```
+
+or, when it cannot, `ok` false with a `code` and a `message`. When
+FlashTeams for agents is off, or nobody is signed in, Flash Console answers
+`ok` true with one short line saying so.
+
+The hook waits at most 1.5 seconds from connecting. When the answer is a
+JSON object with `v` 1, the request's `id`, `ok` true and some `text` (a
+string), the hook prints exactly one line on stdout, the JSON object both
+agents read from a session start hook:
+
+```json
+{"hookSpecificOutput":{"additionalContext":"FlashTeams is available in this session...","hookEventName":"SessionStart"}}
+```
+
+Before printing, the text has `\r\n` and `\r` turned into `\n`, and loses
+the control characters other than newline and tab and the invisible
+characters listed under [Fields](#fields). Flash Console keeps the text
+under 9,000 characters; a text over 10,000, the most an agent takes in one
+piece, is cut at the end of a line and ends with
+`[cut: N more characters]`.
+
+Anything else prints nothing: no answer in time, a refusal, an answer that
+is not one JSON line with all of the above, or a Flash Console from before
+briefings, which reads the line, finds no `event`, and closes without a
+word. The starter also passes on what Perl printed only when Perl exited 0
+and printed one line that starts `{"hookSpecificOutput":{` and ends `}}`.
+No other hook ever asks for a briefing or prints anything.
+
+The longest a session start can take is a little under 3 seconds: up to
+1 second waiting for the agent's input, 0.2 for the status event, 1.5 for the
+briefing, and a little to finish reading the input. A hard limit of 3.3
+seconds stops it, well inside the 5 seconds each agent gives the hook.
+
 ### The environment Flash Console sets
 
 Every shell Flash Console starts has `FLASH_CONSOLE_AGENT_PROTOCOL_VERSION=1`,
-`FLASH_CONSOLE_VERSION` and `FLASH_CONSOLE_PANE`, the pane's stable id (not a
-secret).
+`FLASH_CONSOLE_VERSION`, `FLASH_CONSOLE_PANE`, the pane's stable id (not a
+secret), and `FLASH_CONSOLE_BIN`, the folder that holds the `flashteams`
+command, which Flash Console also adds to the end of `PATH`.
 
 Claude Code runs its hooks inside its own process in the tab, so its events
 carry `pane`. Codex runs hooks in a shared background server whose
@@ -220,6 +339,38 @@ when no pane is clearly right. Codex runs `SessionStart` when the first
 prompt is sent, not when it launches, so a Codex `session_start` arrives just
 before its first `prompt_submit`.
 
+## The flashteams command
+
+Flash Console provides the command and keeps it at
+`~/Library/Application Support/Flash Console/bin/flashteams`. It only talks
+to Flash Console over the socket above.
+
+```sh
+flashteams tools                      # every tool, one line each
+flashteams help <tool>                # a tool's arguments and an example
+flashteams <tool> --<argument> <value> [--json '<object>'] [--output json]
+```
+
+A value of `-` reads that argument from standard input. Errors are one line
+on stderr, and the exit code says what kind:
+
+| Exit | Meaning |
+| :- | :- |
+| 0 | Done. |
+| 1 | FlashTeams or the tool said no, or the person declined. |
+| 2 | The command was wrong. |
+| 3 | Flash Console is not running or is too old, or a sandbox blocked the socket. |
+| 4 | FlashTeams for agents is off or read only, or nobody is signed in. |
+| 5 | Timed out, busy, or the network failed. |
+
+Claude Code puts a plugin's `bin` folder on its Bash tool's `PATH`, so the
+Claude Code plugin ships `bin/flashteams`, a short `sh` script that runs
+`${FLASH_CONSOLE_BIN:-$HOME/Library/Application Support/Flash Console/bin}/flashteams`
+with every argument. When that file is not there it prints
+`Flash Console is not running or is too old to provide the flashteams command.`
+and exits 3. Codex has no such folder, and finds the command on the `PATH`
+Flash Console sets.
+
 ## What is in this repository
 
 ```text
@@ -227,60 +378,82 @@ before its first `prompt_submit`.
 .agents/plugins/marketplace.json    Codex marketplace
 plugins/claude/flashteams/          the Claude Code plugin
   .claude-plugin/plugin.json
-  .mcp.json                         the FlashTeams MCP server
+  bin/flashteams                    copy of shared/bin/
   hooks/hooks.json                  which hooks run the hook program
   hooks/flashteams-hook.sh          copy of shared/hooks/
   hooks/flashteams-hook.pl          copy of shared/hooks/
+  skills/flashteams/                copy of shared/skills/, plus allowed-tools
+plugins/claude/flashteams-mcp/      the optional Claude Code MCP plugin
+  .claude-plugin/plugin.json
+  .mcp.json                         the FlashTeams MCP server
   skills/flashteams-next-task/      copy of shared/skills/
 plugins/codex/flashteams/           the Codex plugin
   .codex-plugin/plugin.json
-  .mcp.json                         the FlashTeams MCP server
-  hooks/ and skills/                as above
-shared/                             the hook program and skill, edited here
+  hooks/ and skills/flashteams/     as above
+plugins/codex/flashteams-mcp/       the optional Codex MCP plugin
+  .codex-plugin/plugin.json
+  .mcp.json and skills/             as above
+shared/                             the hook program, shim and skills, edited here
 script/check                        every check, as CI runs it
-script/sync                         copies shared/ into both plugins
+script/sync                         copies shared/ into the plugins
 test/                               tests
 ```
 
 Each plugin keeps its own copy of the shared files because each agent
-installs a plugin folder on its own. The two plugin folders are separate so
-neither agent loads the other's manifest.
+installs a plugin folder on its own. Each agent's plugins are separate from
+the other agent's so neither agent loads the other's manifest. Claude
+Code's copy of the `flashteams` skill adds one line to the frontmatter,
+`allowed-tools: Bash(flashteams:*)`, so the skill can run the command
+without asking each time; Codex does not read that field.
 
-The Codex plugin uses the `.codex-plugin/plugin.json` layout on purpose.
+The Codex plugins use the `.codex-plugin/plugin.json` layout on purpose.
 Codex also reads a newer layout with `plugin.json` and `mcp.json` at the
 plugin root, but Codex 0.160 loads only the skill and the MCP server from it
 and registers none of its hooks, even with a `.codex-plugin/plugin.json`
 beside it. With `.codex-plugin/plugin.json` alone, Codex loads all three, and
 finds the hooks at `hooks/hooks.json`, where it looks when the manifest names
-none. Do not add a root `plugin.json` to the Codex plugin; the tests fail if
+none. Do not add a root `plugin.json` to a Codex plugin; the tests fail if
 one appears.
 
 ## Contributing
 
-1. Edit the hook program and the skill in `shared/`, never the copies, then
-   run `script/sync`.
+1. Edit the hook program, the shim and the skills in `shared/`, never the
+   copies, then run `script/sync`.
 2. Run `script/check`. It compiles the Perl, runs ShellCheck on the shell
    scripts, runs Claude Code's plugin validator when `claude` is installed,
    and runs the tests. GitHub Actions runs the same script on macOS and
    Ubuntu for every push and pull request.
-3. For a release, raise `version` in
-   `plugins/claude/flashteams/.claude-plugin/plugin.json`,
-   `plugins/codex/flashteams/.codex-plugin/plugin.json` and `$VERSION` in
-   `shared/hooks/flashteams-hook.pl` together (the tests check they match).
-   People only receive an update when the version changes.
+3. For a release, raise `version` in all four plugin manifests
+   (`plugins/claude/flashteams/.claude-plugin/plugin.json`,
+   `plugins/claude/flashteams-mcp/.claude-plugin/plugin.json`,
+   `plugins/codex/flashteams/.codex-plugin/plugin.json`,
+   `plugins/codex/flashteams-mcp/.codex-plugin/plugin.json`) and `$VERSION`
+   in `shared/hooks/flashteams-hook.pl` together (the tests check they
+   match). People only receive an update when the version changes.
 
 The tests run the hook exactly as each agent does, with the command from its
 `hooks.json`, for every event of both agents, against a throwaway socket.
 They check the JSON lines, the caps, the removal of control and invisible
 characters, the `subagent` and `interrupted` flags and `subagent_id`, the
 `source` of a session start, that Codex never sends `pane`, that nothing
-reaches stdout, the 8192-byte limit, inputs of several megabytes, and the
-quiet exits: no socket, a refused socket, a socket that never answers, a
-full socket queue, input that never ends, no Perl, a missing Perl module, a
-hook program that does not compile, dies, fails or is killed, a plugin
-folder that was deleted or lost its starter or its Perl program, an
-unreadable starter, and `errexit`, `nounset` and `xtrace` passed in through
-`SHELLOPTS` to bash running as `sh`.
+reaches stdout but the briefing, the 8192-byte limit, inputs of several
+megabytes, and the quiet exits: no socket, a refused socket, a socket that
+never answers, a full socket queue, input that never ends, no Perl, a
+missing Perl module, a hook program that does not compile, dies, fails or is
+killed, a plugin folder that was deleted or lost its starter or its Perl
+program, an unreadable starter, and `errexit`, `nounset` and `xtrace` passed
+in through `SHELLOPTS` to bash running as `sh`.
+
+For the briefing, the throwaway socket also stands in for Flash Console's
+answer: at once, after a second, in pieces, too late, never, by closing
+without a word as an older Flash Console does, and with answers that are
+wrong in every way listed above. The tests check the request, the one line
+printed, the text's cleaning and cutting, that nothing is printed on any
+failure, that the 1.5 second wait is honoured, that no other hook asks or
+prints, and that the starter passes on nothing but one whole briefing from a
+Perl program that finished well. `test/bin.t` runs the Claude Code shim
+against a stand-in `flashteams` command, and `test/manifests.t` checks both
+marketplaces, all four plugins and the skills.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
 bash for the shell-option tests (they are skipped without it), and
