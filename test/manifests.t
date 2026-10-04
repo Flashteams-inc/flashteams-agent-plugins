@@ -351,10 +351,12 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     like($skill, qr/allowUnixSockets/,               'the flashteams skill names Claude Code\'s socket setting');
     like($skill, qr/^\| $_ \|/m, "the flashteams skill explains exit code $_") for 0 .. 5;
 
-    # Exit 0 can still carry a refusal; exit 3 tries the briefing's path
-    # once; after exit 5 a change is checked before it is repeated, and
-    # FlashBrain is never asked twice.
-    like($skill, qr/^\| 0 \|[^\n]*said no/m,             'exit 0: the answer may still say no');
+    # A tool's refusal exits 1 with its answer on stdout; exit 3 tries the
+    # briefing's path once; after exit 5 a change is checked before it is
+    # repeated, and FlashBrain is never asked twice.
+    like($skill, qr/^\| 1 \|[^\n]*said no/m,             'exit 1: the tool or FlashTeams said no');
+    like($skill, qr/prints the tool's answer as written on stdout/, 'a refusal is the tool\'s answer on stdout');
+    unlike($skill, qr/still\s+exits 0/,                 'no refusal is described as exit 0');
     like($skill, qr/^\| 3 \|[^\n]*full path[^\n]*once/m, 'exit 3: the briefing\'s full path, once');
     like($skill, qr/Check first with a read/,           'exit 5: a change is checked before it is repeated');
     like($skill, qr/`ask_flashbrain` that took too long:\*\* never ask again/, 'exit 5: FlashBrain is never asked twice');

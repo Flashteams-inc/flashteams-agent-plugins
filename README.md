@@ -365,13 +365,15 @@ flashteams <tool> --<argument> <value> [--json '<object>'] [--output json]
 
 A value of `-` reads that argument from standard input. Flash Console
 limits how long one request can be, text from standard input included, and
-says so when a request is too long. Errors are one line on stderr, and the
-exit code says what kind:
+says so when a request is too long. Flash Console's errors are one line on
+stderr. A tool turning a request down by its own rules prints its answer on
+stdout as written (JSON with `"success": false`) and exits 1. The exit code
+says what kind:
 
 | Exit | Meaning |
 | :- | :- |
-| 0 | Done. The tool's answer can still turn the request down, for example with `"success": false`. |
-| 1 | FlashTeams or the tool said no, or the person declined. |
+| 0 | Done. |
+| 1 | FlashTeams or the tool said no (the tool's answer is on stdout), or the person declined. |
 | 2 | The command was wrong, or too long for Flash Console. |
 | 3 | Flash Console is not running or is too old, or a sandbox blocked the socket. |
 | 4 | FlashTeams for agents is off or read only, or nobody is signed in. |

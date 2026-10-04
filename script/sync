@@ -25,10 +25,7 @@ for tool in \
   list_programs connect_program program_documents list_products \
   code_map query_codebase read_source read_docs resolve_code_name \
   search_recipes learn_recipe run_recipe get_findings find_experts \
-  list_pending_approvals list_org_members get_followups \
-  get_deadlines get_executive_summary get_person_activity get_person_workload \
-  get_portfolio_health get_project_health get_team_capacity get_team_utilization \
-  get_time_logs get_time_off; do
+  list_pending_approvals; do
   allowed="${allowed:+$allowed, }Bash(flashteams $tool:*)"
 done
 

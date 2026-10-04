@@ -33,9 +33,10 @@ flashteams update_task --task_id <task id> --action start
   JSON. `--json '{...}'` passes all the arguments at once.
 - `--output json` prints the whole answer as JSON.
 - If `flashteams` is not found, run the full path the briefing gives.
-- Read each answer. A tool can turn a request down in its answer, for
-  example with `"success": false` and a message, and the command still
-  exits 0.
+- Read each answer. When a tool turns a request down by its own rules,
+  the command prints the tool's answer as written on stdout (JSON with
+  `"success": false` and the reason) and exits 1. That answer can carry
+  what the next step needs, such as a `request_id`.
 
 ## Long text
 
@@ -83,13 +84,14 @@ none is easy to undo.
 
 ## When a command fails
 
-The error is one line on stderr, written for the person. The exit code
-says what kind of failure it is:
+Flash Console's own errors are one line on stderr, written for the
+person. A tool turning a request down answers on stdout instead. The exit
+code says what kind of failure it is:
 
 | Exit | Meaning | What to do |
 | :- | :- | :- |
-| 0 | Done. | Read the answer: the tool may still have said no in it. |
-| 1 | FlashTeams or the tool said no, or the person declined. | Read the message. Do not repeat the same call unchanged. |
+| 0 | Done. | Read the answer. |
+| 1 | FlashTeams or the tool said no, or the person declined. | Read the answer or the message: it says why. Do not repeat the same call unchanged. |
 | 2 | The command was wrong, or too long. | Check `flashteams help <tool>`, or shorten the text. |
 | 3 | Flash Console is not running, is too old, or a sandbox blocked it. | If the briefing gave the command's full path, run the same command once with that path in place of `flashteams`. If that fails too, tell the person. See below for sandboxes. |
 | 4 | FlashTeams for agents is off or read only in Flash Console, or nobody is signed in. | Tell the person what the message says. Do not work around it. |

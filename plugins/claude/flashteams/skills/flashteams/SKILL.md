@@ -1,7 +1,7 @@
 ---
 name: flashteams
 description: Use FlashTeams through the flashteams command that Flash Console provides. Load this for anything about FlashTeams projects, tasks, phases or programs, the exploration graph, FlashBrain, recipes, or questions about the organization's code graph, such as finding, starting, updating or closing a task, reading a project's plan, or asking how a piece of the code fits together.
-allowed-tools: Bash(flashteams tools:*), Bash(flashteams help:*), Bash(flashteams list_my_projects:*), Bash(flashteams connect_workspace:*), Bash(flashteams find_tasks:*), Bash(flashteams load_task:*), Bash(flashteams load_project:*), Bash(flashteams search:*), Bash(flashteams get_events:*), Bash(flashteams list_programs:*), Bash(flashteams connect_program:*), Bash(flashteams program_documents:*), Bash(flashteams list_products:*), Bash(flashteams code_map:*), Bash(flashteams query_codebase:*), Bash(flashteams read_source:*), Bash(flashteams read_docs:*), Bash(flashteams resolve_code_name:*), Bash(flashteams search_recipes:*), Bash(flashteams learn_recipe:*), Bash(flashteams run_recipe:*), Bash(flashteams get_findings:*), Bash(flashteams find_experts:*), Bash(flashteams list_pending_approvals:*), Bash(flashteams list_org_members:*), Bash(flashteams get_followups:*), Bash(flashteams get_deadlines:*), Bash(flashteams get_executive_summary:*), Bash(flashteams get_person_activity:*), Bash(flashteams get_person_workload:*), Bash(flashteams get_portfolio_health:*), Bash(flashteams get_project_health:*), Bash(flashteams get_team_capacity:*), Bash(flashteams get_team_utilization:*), Bash(flashteams get_time_logs:*), Bash(flashteams get_time_off:*)
+allowed-tools: Bash(flashteams tools:*), Bash(flashteams help:*), Bash(flashteams list_my_projects:*), Bash(flashteams connect_workspace:*), Bash(flashteams find_tasks:*), Bash(flashteams load_task:*), Bash(flashteams load_project:*), Bash(flashteams search:*), Bash(flashteams get_events:*), Bash(flashteams list_programs:*), Bash(flashteams connect_program:*), Bash(flashteams program_documents:*), Bash(flashteams list_products:*), Bash(flashteams code_map:*), Bash(flashteams query_codebase:*), Bash(flashteams read_source:*), Bash(flashteams read_docs:*), Bash(flashteams resolve_code_name:*), Bash(flashteams search_recipes:*), Bash(flashteams learn_recipe:*), Bash(flashteams run_recipe:*), Bash(flashteams get_findings:*), Bash(flashteams find_experts:*), Bash(flashteams list_pending_approvals:*)
 ---
 
 # FlashTeams through the flashteams command
@@ -34,9 +34,10 @@ flashteams update_task --task_id <task id> --action start
   JSON. `--json '{...}'` passes all the arguments at once.
 - `--output json` prints the whole answer as JSON.
 - If `flashteams` is not found, run the full path the briefing gives.
-- Read each answer. A tool can turn a request down in its answer, for
-  example with `"success": false` and a message, and the command still
-  exits 0.
+- Read each answer. When a tool turns a request down by its own rules,
+  the command prints the tool's answer as written on stdout (JSON with
+  `"success": false` and the reason) and exits 1. That answer can carry
+  what the next step needs, such as a `request_id`.
 
 ## Long text
 
@@ -84,13 +85,14 @@ none is easy to undo.
 
 ## When a command fails
 
-The error is one line on stderr, written for the person. The exit code
-says what kind of failure it is:
+Flash Console's own errors are one line on stderr, written for the
+person. A tool turning a request down answers on stdout instead. The exit
+code says what kind of failure it is:
 
 | Exit | Meaning | What to do |
 | :- | :- | :- |
-| 0 | Done. | Read the answer: the tool may still have said no in it. |
-| 1 | FlashTeams or the tool said no, or the person declined. | Read the message. Do not repeat the same call unchanged. |
+| 0 | Done. | Read the answer. |
+| 1 | FlashTeams or the tool said no, or the person declined. | Read the answer or the message: it says why. Do not repeat the same call unchanged. |
 | 2 | The command was wrong, or too long. | Check `flashteams help <tool>`, or shorten the text. |
 | 3 | Flash Console is not running, is too old, or a sandbox blocked it. | If the briefing gave the command's full path, run the same command once with that path in place of `flashteams`. If that fails too, tell the person. See below for sandboxes. |
 | 4 | FlashTeams for agents is off or read only in Flash Console, or nobody is signed in. | Tell the person what the message says. Do not work around it. |
