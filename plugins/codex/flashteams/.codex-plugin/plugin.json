@@ -1,7 +1,7 @@
 {
   "name": "flashteams",
-  "version": "1.0.0",
-  "description": "Connects Codex to FlashTeams: the FlashTeams MCP server, a skill for working your next task, and hooks that tell Flash Console what Codex is doing.",
+  "version": "1.1.0",
+  "description": "FlashTeams in Codex through Flash Console: a briefing when a session starts, a skill for using the flashteams command, and hooks that tell Flash Console what Codex is doing.",
   "author": {
     "name": "FlashTeams",
     "url": "https://flashteams.ai"
@@ -9,13 +9,12 @@
   "homepage": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
   "repository": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
   "license": "MIT",
-  "keywords": ["flashteams", "flash-console", "tasks", "mcp"],
+  "keywords": ["flashteams", "flash-console", "tasks"],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "FlashTeams",
-    "shortDescription": "Your FlashTeams tasks, and Codex status in Flash Console",
-    "longDescription": "Adds the FlashTeams MCP server and a skill for working your next FlashTeams task, and tells Flash Console when Codex is working, needs you or is done.",
+    "shortDescription": "FlashTeams through Flash Console, and Codex status there",
+    "longDescription": "Lets Codex use every FlashTeams tool through the flashteams command that Flash Console provides, with your Flash Console sign-in, briefs Codex on FlashTeams when a session starts, and tells Flash Console when Codex is working, needs you or is done.",
     "developerName": "FlashTeams",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

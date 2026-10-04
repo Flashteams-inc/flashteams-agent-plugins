@@ -1,0 +1,20 @@
+#!/bin/sh
+# The flashteams command, for Claude Code. Claude Code puts this plugin's
+# bin folder on the PATH of its Bash tool, and this hands every argument to
+# the flashteams command that Flash Console keeps in its own folder. Flash
+# Console names that folder in FLASH_CONSOLE_BIN in every shell it starts.
+#
+# The flashteams command only talks to Flash Console on this computer;
+# this file holds no token and makes no connection of its own.
+
+bin="${FLASH_CONSOLE_BIN:-${HOME:-}/Library/Application Support/Flash Console/bin}/flashteams"
+
+# A FLASH_CONSOLE_BIN naming this folder would start this file again, and
+# again. FLASHTEAMS_SHIM marks the second time round.
+if [ -n "${FLASHTEAMS_SHIM:-}" ] || [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
+  echo "Flash Console is not running or is too old to provide the flashteams command." >&2
+  exit 3
+fi
+FLASHTEAMS_SHIM=1
+export FLASHTEAMS_SHIM
+exec "$bin" "$@"

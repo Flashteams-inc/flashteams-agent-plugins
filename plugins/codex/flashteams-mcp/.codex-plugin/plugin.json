@@ -1,0 +1,27 @@
+{
+  "name": "flashteams-mcp",
+  "version": "1.1.0",
+  "description": "Connects Codex to the FlashTeams MCP server with your own FlashTeams sign-in, and adds a skill for working your next task. Optional: the flashteams plugin already gives Codex every FlashTeams tool inside Flash Console.",
+  "author": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "homepage": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "repository": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "license": "MIT",
+  "keywords": ["flashteams", "tasks", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "FlashTeams MCP",
+    "shortDescription": "The FlashTeams MCP server, with your own sign-in",
+    "longDescription": "Adds the FlashTeams MCP server, which you sign in to with your own FlashTeams account, and a skill for working your next FlashTeams task. Optional when you use Flash Console, whose flashteams command already gives Codex every FlashTeams tool.",
+    "developerName": "FlashTeams",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://flashteams.ai",
+    "defaultPrompt": [
+      "Use the FlashTeams MCP server to pick up my next task."
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "flashteams",
-  "description": "FlashTeams for Claude Code: your FlashTeams tasks and projects, and live agent status in Flash Console.",
+  "description": "FlashTeams for Claude Code: every FlashTeams tool through Flash Console, live agent status in Flash Console, and an optional MCP server.",
   "owner": {
     "name": "FlashTeams",
     "url": "https://flashteams.ai"
@@ -9,7 +9,13 @@
     {
       "name": "flashteams",
       "source": "./plugins/claude/flashteams",
-      "description": "Connects Claude Code to FlashTeams and tells Flash Console what Claude Code is doing.",
+      "description": "Gives Claude Code every FlashTeams tool through Flash Console's flashteams command, and tells Flash Console what Claude Code is doing.",
+      "category": "productivity"
+    },
+    {
+      "name": "flashteams-mcp",
+      "source": "./plugins/claude/flashteams-mcp",
+      "description": "Optional: the FlashTeams MCP server, with your own FlashTeams sign-in, and a skill for working your next task.",
       "category": "productivity"
     }
   ]

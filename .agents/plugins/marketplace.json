@@ -15,6 +15,18 @@
         "authentication": "ON_USE"
       },
       "category": "Productivity"
+    },
+    {
+      "name": "flashteams-mcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/codex/flashteams-mcp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
     }
   ]
 }

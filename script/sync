@@ -1,13 +1,29 @@
 #!/bin/sh
-# Copies the files both plugins share from shared/ into each plugin folder.
+# Copies the files the plugins share from shared/ into each plugin folder.
 # Edit them in shared/, then run this. script/check fails when a copy is
 # out of date.
+#
+# The flashteams skill is the same for both agents, except that Claude
+# Code's copy also lets the skill run the flashteams command without asking
+# each time (allowed-tools), a field Codex does not read. Only Claude Code
+# puts a plugin's bin folder on its PATH, so only it gets the shim.
 set -eu
 cd "$(dirname "$0")/.."
 
 for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
-  mkdir -p "$plugin/hooks" "$plugin/skills/flashteams-next-task"
+  mkdir -p "$plugin/hooks" "$plugin/skills/flashteams"
   cp shared/hooks/flashteams-hook.pl shared/hooks/flashteams-hook.sh "$plugin/hooks/"
+  cp shared/skills/flashteams/SKILL.md "$plugin/skills/flashteams/"
+done
+
+mkdir -p plugins/claude/flashteams/bin
+cp shared/bin/flashteams plugins/claude/flashteams/bin/
+chmod 755 plugins/claude/flashteams/bin/flashteams
+perl -pi -e 'print "allowed-tools: Bash(flashteams:*)\n" if $_ eq "---\n" && ++$fences == 2' \
+  plugins/claude/flashteams/skills/flashteams/SKILL.md
+
+for plugin in plugins/claude/flashteams-mcp plugins/codex/flashteams-mcp; do
+  mkdir -p "$plugin/skills/flashteams-next-task"
   cp shared/skills/flashteams-next-task/SKILL.md "$plugin/skills/flashteams-next-task/"
 done
-echo "Copied shared/ into both plugins."
+echo "Copied shared/ into every plugin."

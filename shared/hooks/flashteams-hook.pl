@@ -40,7 +40,7 @@ use JSON::PP ();
 use Socket qw(SOCK_STREAM);
 use Time::HiRes ();
 
-our $VERSION = '1.0.0';
+our $VERSION = '1.1.0';
 
 use constant {
     PROTOCOL_VERSION => 1,

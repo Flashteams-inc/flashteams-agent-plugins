@@ -16,10 +16,11 @@ step "Perl compiles the hook and the tests"
 perl -c shared/hooks/flashteams-hook.pl
 perl -c test/hook.t
 perl -c test/manifests.t
+perl -c test/bin.t
 
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck shared/hooks/flashteams-hook.sh script/check script/sync
+  shellcheck shared/hooks/flashteams-hook.sh shared/bin/flashteams script/check script/sync
   # Each hook command in both hooks.json files, and the guard script it
   # hands to sh -c, checked as an sh script of its own.
   commands=$(mktemp -d)
@@ -51,6 +52,7 @@ step "Claude Code plugin validator"
 if command -v claude >/dev/null 2>&1; then
   claude plugin validate --strict .
   claude plugin validate --strict plugins/claude/flashteams
+  claude plugin validate --strict plugins/claude/flashteams-mcp
 else
   echo "The claude command is not installed, so this step was skipped"
 fi
