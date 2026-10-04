@@ -133,6 +133,10 @@ codex plugin add flashteams@flashteams
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
 
+**Coming from 1.1.0:** Claude Code stops asking before each `flashteams`
+command once the update is installed and Claude Code restarted. Flash
+Console keeps asking before the actions that need it. Codex is unchanged.
+
 **Coming from 1.0.0:** the MCP server moved from `flashteams` to the new
 `flashteams-mcp` plugin. Inside Flash Console the `flashteams` command does
 the same work without it. To keep the MCP server as well, install
