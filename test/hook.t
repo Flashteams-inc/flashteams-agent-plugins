@@ -1148,7 +1148,7 @@ sub status_of {
     return $run->{data} eq '' ? undef : eval { $JSON->decode($run->{data}) };
 }
 
-my %REQUEST_FIELDS = map { $_ => 1 } qw(v op id agent cwd pane source);
+my %REQUEST_FIELDS = map { $_ => 1 } qw(v op id agent cwd pane source session);
 
 for my $agent (qw(claude codex)) {
     my $run = session_start(agent => $agent);
@@ -1170,6 +1170,7 @@ for my $agent (qw(claude codex)) {
     is($request->{agent}, $agent,     "$agent briefing: names the agent");
     is($request->{cwd},   $CWD,       "$agent briefing: the agent's working folder");
     is($request->{source}, 'startup', "$agent briefing: why the session started");
+    is($request->{session}, $agent eq 'claude' ? 'abc123' : 'thr_123', "$agent briefing: the conversation's own id, for its resume command");
     # Codex runs hooks in a shared background server whose environment may
     # name another terminal's pane, so its requests never name one.
     is($request->{pane}, $agent eq 'claude' ? 'pane-42' : '', "$agent briefing: the pane, from Claude Code only");

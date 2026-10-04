@@ -56,7 +56,7 @@ use JSON::PP ();
 use Socket qw(SOCK_STREAM);
 use Time::HiRes ();
 
-our $VERSION = '1.3.0';
+our $VERSION = '1.4.0';
 
 use constant {
     PROTOCOL_VERSION => 1,
@@ -508,6 +508,10 @@ sub ask_briefing {
     );
     my $source = $in->text('source', NAME_LIMIT);
     $request{source} = $source if defined $source;
+    # The agent's own id for this conversation, so the briefing can say how
+    # to reopen it: only one made of plain characters goes.
+    my $session = $in->text('session_id', ID_LIMIT);
+    $request{session} = $session if defined $session && $session =~ /\A[A-Za-z0-9._:-]{1,128}\z/;
 
     my $line = JSON::PP->new->utf8->canonical->encode(\%request) . "\n";
     return undef if length($line) > MAX_REQUEST;

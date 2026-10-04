@@ -1,6 +1,6 @@
 {
   "name": "flashteams-mcp",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Connects Codex to the FlashTeams MCP server with your own FlashTeams sign-in, and adds a skill for working your next task. Optional: the flashteams plugin already gives Codex every FlashTeams tool inside Flash Console.",
   "author": {
     "name": "FlashTeams",
