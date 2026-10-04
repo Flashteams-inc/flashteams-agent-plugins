@@ -1189,12 +1189,36 @@ for my $agent (qw(claude codex)) {
     is($big->{requests}[0]{cwd}, $deep, 'briefing from a deep folder: the folder is sent whole');
 }
 
-# The text: lines and tabs stay, control and invisible characters go, and a
+# How long a text is to an agent: JavaScript's length, in UTF-16 units, so
+# a character past U+FFFF counts as two.
+sub utf16_length {
+    my ($text) = @_;
+    return length($text) + ($text =~ tr/\x{10000}-\x{10FFFF}//);
+}
+
+# The text: lines and tabs stay, other line breaks become lines, other
+# control characters become a space, invisible characters go, and a
 # briefing longer than agents take in one piece is cut at a line end.
 {
     my $messy = session_start(answer => answers(0,
         text => "One\r\nTwo\rThree\x07\x1b[0m\x{202E}\x{200B}\x{2028}\x{FEFF}\tFour\x{85}"));
-    is(briefing_of($messy, 'messy briefing'), "One\nTwo\nThree[0m\tFour", 'messy briefing: cleaned');
+    is(briefing_of($messy, 'messy briefing'), "One\nTwo\nThree [0m\n\tFour\n", 'messy briefing: cleaned');
+
+    # Words either side of a removed character stay apart.
+    my %apart = (
+        "line one\x{2028}still one\nnext\x07bell" => "line one\nstill one\nnext bell",
+        "para one\x{2029}para two"                => "para one\npara two",
+        "tab\x0Bvertical\x0Cform feed"            => "tab\nvertical\nform feed",
+        "next\x{85}line"                          => "next\nline",
+        "null\x00and\x01\x02\x1fcontrols\x7f\x9fend" => "null and controls end",
+        "joined\x{200B}word"                      => "joinedword",
+    );
+    for my $text (sort keys %apart) {
+        (my $name = $text) =~ s/([^\x20-\x7e])/sprintf('\\x{%X}', ord $1)/ge;
+        (my $want = $apart{$text}) =~ s/\n/ | /g;
+        is(briefing_of(session_start(answer => answers(0, text => $text)), "briefing '$name'"), $apart{$text},
+            "briefing '$name': $want");
+    }
 
     my $nine = join("\n", ('n' x 99) x 90);
     is(length($nine), 8999, 'a briefing of 8999 characters');
@@ -1216,7 +1240,32 @@ for my $agent (qw(claude codex)) {
     my $line = "\x{1F680}" x 20000;
     my $one = briefing_of(session_start(answer => answers(0, text => $line)), 'one long line');
     like($one, qr/\A\x{1F680}+\n\[cut: \d+ more characters\]\z/, 'one long line: cut where it must be, with the note');
-    cmp_ok(length($one), '<=', 10000, 'one long line: at most 10000 characters');
+    cmp_ok(utf16_length($one), '<=', 10000, 'one long line: at most 10000 UTF-16 units');
+    my ($rockets, $left) = $one =~ /\A(\x{1F680}+)\n\[cut: (\d+) more characters\]\z/;
+    is($left, 20000 - length($rockets // ''), 'one long line: the note counts what was cut');
+
+    # Agents count the limit in UTF-16 units, as JavaScript does, so a
+    # character past U+FFFF, such as an emoji, takes two.
+    my $fits = "\x{1F680}" x 5000;
+    is(briefing_of(session_start(answer => answers(0, text => $fits)), '5000 emoji'), $fits,
+        '5000 emoji, 10000 UTF-16 units: whole');
+    my $mixed = ('a' x 9990) . ("\x{1F680}" x 5);
+    is(briefing_of(session_start(answer => answers(0, text => $mixed)), '10000 units, mixed'), $mixed,
+        'letters and emoji in exactly 10000 UTF-16 units: whole');
+    for my $case (["\x{1F680}" x 5001, '5001 emoji'], [$mixed . 'a', 'one unit over, mixed'],
+        ["\x{1F680}" x 9500, '9500 emoji'])
+    {
+        my ($text, $name) = @$case;
+        my $cut = briefing_of(session_start(answer => answers(0, text => $text)), $name);
+        cmp_ok(utf16_length($cut), '<=', 10000, "$name: cut to at most 10000 UTF-16 units");
+        like($cut, qr/\n\[cut: \d+ more characters\]\z/, "$name: with the note");
+    }
+    my $lines = join("\n", ("\x{1F680}" x 50) x 150);
+    my $cut_lines = briefing_of(session_start(answer => answers(0, text => $lines)), 'emoji lines');
+    cmp_ok(utf16_length($cut_lines), '<=', 10000, 'emoji lines: at most 10000 UTF-16 units');
+    my ($whole_lines) = $cut_lines =~ /\A((?:\x{1F680}{50}\n)+)\[cut: \d+ more characters\]\z/;
+    ok(defined $whole_lines, 'emoji lines: cut at a line end');
+    cmp_ok(utf16_length($whole_lines // ''), '>', 9800, 'emoji lines: as many whole lines as fit');
 
     # Just under the 1 MiB answer limit is still read, and cut.
     my $huge = 'h' x (1024 * 1024 - 200);
@@ -1249,11 +1298,11 @@ for my $agent (qw(claude codex)) {
         'an answer that is a JSON array'      => sub { [[0, qq([1,2,3]\n)]] },
         'an answer that is a JSON string'     => sub { [[0, qq("text"\n)]] },
         'an answer cut short'                 => sub { [[0, substr(good_answer($_[0]), 0, 40)]] },
-        'a refusal'                           => sub {
-            [[0, $JSON->encode({ v => 1, id => $_[0]{id}, ok => JSON::PP::false, code => 'off',
-                message => 'FlashTeams for agents is off.' }) . "\n"]];
-        },
         'ok given as a number'                => answers(0, ok => 1),
+        'ok false given as a number'          => answers(0, ok => 0, code => 'busy', message => 'Busy.'),
+        'ok false given as a string'          => answers(0, ok => 'false', code => 'busy', message => 'Busy.'),
+        'a refusal to another request'        => answers(0, ok => JSON::PP::false, id => 'f' x 32, code => 'busy'),
+        'a refusal in another version'        => answers(0, ok => JSON::PP::false, v => 2, code => 'busy'),
         'ok given as a string'                => answers(0, ok => 'true'),
         'another request\'s id'               => answers(0, id => 'f' x 32),
         'no id'                               => answers(0, id => undef),
@@ -1273,6 +1322,44 @@ for my $agent (qw(claude codex)) {
         my $run = no_briefing(session_start(answer => $bad{$name}), $name);
         my $status = status_of($run);
         is($status && $status->{event}, 'session_start', "$name: the status event is still sent");
+    }
+
+    # A refusal: Flash Console is there but could not brief this session,
+    # for example because it is busy. The agent hears that, why, and how to
+    # start with the command anyway, never nothing at all.
+    my $NOTE = "Flash Console could not send the FlashTeams briefing for this session.";
+    my $START = "\nThe flashteams command may still work: run flashteams tools for the list of tools"
+      . " and flashteams help <tool> for a tool's arguments.";
+    my $refusal = sub {
+        my (%fields) = @_;
+        return sub { [[0, $JSON->encode({ v => 1, id => $_[0]{id}, ok => JSON::PP::false, %fields }) . "\n"]] };
+    };
+    my $busy = 'Flash Console is already answering 4 FlashTeams requests. Try again when one finishes.';
+    my %refusals = (
+        'a busy refusal'                => [{ code => 'busy', message => $busy }, "$NOTE $busy$START"],
+        'a refusal on several lines'    => [{ code => 'internal', message => "Something\nwent \x07 wrong.\x{2028}Sorry." },
+            "$NOTE Something went wrong. Sorry.$START"],
+        'a refusal with only a code'    => [{ code => 'busy' }, "$NOTE Its answer was busy.$START"],
+        'a refusal with an odd code'    => [{ code => "Bad\ncode" }, "$NOTE$START"],
+        'a refusal with nothing more'   => [{}, "$NOTE$START"],
+        'a refusal with an empty message' => [{ code => 'busy', message => " \n " }, "$NOTE Its answer was busy.$START"],
+        'a refusal with a number message' => [{ code => 'busy', message => 42 }, "$NOTE Its answer was busy.$START"],
+    );
+    for my $name (sort keys %refusals) {
+        my ($fields, $want) = @{ $refusals{$name} };
+        my $run = session_start(answer => $refusal->(%$fields));
+        is(briefing_of($run, $name), $want, "$name: a short note for the agent");
+        cmp_ok($run->{seconds}, '<', 1, "$name: quick");
+        my $status = status_of($run);
+        is($status && $status->{event}, 'session_start', "$name: the status event is still sent");
+    }
+    my $long = 'Why ' x 200;
+    my $long_note = briefing_of(session_start(answer => $refusal->(code => 'busy', message => $long)), 'a long refusal');
+    my ($why) = ($long_note // '') =~ /\A\Q$NOTE\E (.*)\Q$START\E\z/s;
+    ok(defined $why && length($why) <= 320 && $why !~ /\n/, 'a long refusal: its message cut to one short line');
+    for my $agent (qw(claude codex)) {
+        is(briefing_of(session_start(agent => $agent, answer => $refusal->(code => 'busy', message => $busy)),
+            "$agent busy refusal"), "$NOTE $busy$START", "$agent busy refusal: the note");
     }
 
     # Too slow: the hook gives up at 1.5 seconds and prints nothing.

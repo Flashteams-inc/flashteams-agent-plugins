@@ -151,7 +151,8 @@ choose `flashteams`, then **Clear authentication**; in Codex,
 - A briefing request holds the agent, the working folder, the pane and why
   the session started.
 - The only thing the hooks ever print for the agent to read is the
-  briefing, once, when a session starts. They never write to your
+  briefing, once, when a session starts, or a short note that Flash
+  Console could not send it. They never write to your
   terminal and never slow the agent down for more than a moment; a session
   start waits at most a second and a half for the briefing.
 - The `flashteams` command talks only to Flash Console, which calls
@@ -304,19 +305,30 @@ agents read from a session start hook:
 {"hookSpecificOutput":{"additionalContext":"FlashTeams is available in this session...","hookEventName":"SessionStart"}}
 ```
 
-Before printing, the text has `\r\n` and `\r` turned into `\n`, and loses
-the control characters other than newline and tab and the invisible
-characters listed under [Fields](#fields). Flash Console keeps the text
-under 9,000 characters; a text over 10,000, the most an agent takes in one
-piece, is cut at the end of a line and ends with
-`[cut: N more characters]`.
+Before printing, the text has `\r\n` and `\r` turned into `\n`, and so do
+the other line breaks (U+000B, U+000C, U+0085, U+2028 and U+2029). Every
+other run of control characters but tab becomes one space, so the words
+around it stay apart, and the invisible characters listed under
+[Fields](#fields) go. Flash Console keeps the text under 9,000 characters.
+Agents take at most 10,000 in one piece, counted as JavaScript counts a
+string's length, in UTF-16 units, so a character past U+FFFF, such as most
+emoji, counts as two. A longer text is cut at the end of a line and ends
+with `[cut: N more characters]`.
 
-Anything else prints nothing: no answer in time, a refusal, an answer that
-is not one JSON line with all of the above, or a Flash Console from before
-briefings, which reads the line, finds no `event`, and closes without a
-word. The starter also passes on what Perl printed only when Perl exited 0
-and printed one line that starts `{"hookSpecificOutput":{` and ends `}}`.
-No other hook ever asks for a briefing or prints anything.
+When the answer has `v` 1 and the request's `id` but `ok` false, Flash
+Console is there but could not brief this session, for example because it
+was answering too many requests at once. The agent then gets a short note
+in the same JSON object instead of nothing: that the briefing could not be
+sent, Flash Console's `message` on one line of at most 320 characters (or
+its `code` when it gave no message), and to run `flashteams tools` and
+`flashteams help <tool>`.
+
+Anything else prints nothing: no answer in time, an answer that is not one
+JSON line with all of the above, or a Flash Console from before briefings,
+which reads the line, finds no `event`, and closes without a word. The
+starter also passes on what Perl printed only when Perl exited 0 and
+printed one line that starts `{"hookSpecificOutput":{` and ends `}}`. No
+other hook ever asks for a briefing or prints anything.
 
 The longest a session start can take is a little under 3 seconds: up to
 1 second waiting for the agent's input, 0.2 for the status event, 1.5 for the

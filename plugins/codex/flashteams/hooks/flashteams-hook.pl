@@ -18,7 +18,8 @@
 #
 # Rules this program keeps, whatever happens:
 #   - only a session start named on the command line writes to stdout, and
-#     then only one JSON object holding the briefing, after a good answer;
+#     then only one JSON object holding the briefing, after a good answer,
+#     or a short note that the briefing could not be sent, after a refusal;
 #     every other hook writes nothing to stdout, and none to the terminal;
 #   - it never waits long: it gives up on a status event after 200 ms, on
 #     the briefing after 1.5 seconds, and on the whole run after 1.8
@@ -48,7 +49,7 @@ use constant {
     MAX_LINE         => 8192,           # bytes of the line sent, newline included
     MAX_REQUEST      => 16384,          # bytes of a briefing request, newline included
     MAX_REPLY        => 1024 * 1024,    # bytes of Flash Console's answer, newline included
-    CONTEXT_LIMIT    => 10000,          # characters of briefing an agent takes in one piece
+    CONTEXT_LIMIT    => 10000,          # UTF-16 units of briefing an agent takes in one piece
     EXCERPT_LIMIT    => 320,            # characters in an excerpt
     NAME_LIMIT       => 64,
     ID_LIMIT         => 128,
@@ -444,10 +445,12 @@ sub send_line {
 # how to reach FlashTeams through the flashteams command, whose sign-in it
 # uses, the task chosen in Flash Console, and how FlashTeams expects agents
 # to work. The request is one JSON line on the same socket, and Flash
-# Console answers with one JSON line on the same connection. Any trouble,
-# such as no answer in time, an older Flash Console that closes without a
-# word, or an answer that is not a good one, means no briefing and nothing
-# printed.
+# Console answers with one JSON line on the same connection. When Flash
+# Console answers but refuses, for example because it is busy, the agent
+# gets a short note instead: the command is there, and how to start with
+# it. Any other trouble, such as no answer in time, an older Flash Console
+# that closes without a word, or an answer that is not a good one, means no
+# briefing and nothing printed.
 
 sub ask_briefing {
     my ($path, $agent, $in) = @_;
@@ -544,9 +547,11 @@ sub exchange {
     return length($reply) && length($reply) < MAX_REPLY ? $reply : undef;
 }
 
-# The briefing in a good answer to request $id, ready for the agent, or
-# undef. A good answer is a JSON object with v 1, the request's id, ok
-# true and some text.
+# What to tell the agent from Flash Console's answer to request $id, ready
+# for the agent, or undef. An answer is a JSON object with v 1 and the
+# request's id. With ok true and some text, that text is the briefing.
+# With ok false, Flash Console is there but could not brief this session,
+# and the agent hears that in a short note.
 sub briefing_text {
     my ($reply, $id) = @_;
     my $answer = eval { JSON::PP->new->utf8->decode($reply) };
@@ -554,15 +559,36 @@ sub briefing_text {
     my ($v, $answer_id, $ok, $text) = @{$answer}{qw(v id ok text)};
     return undef unless defined $v && !ref $v && $v eq PROTOCOL_VERSION;
     return undef unless is_string($answer_id) && $answer_id eq $id;
-    return undef unless ref $ok eq 'JSON::PP::Boolean' && $ok;
+    return undef unless ref $ok eq 'JSON::PP::Boolean';
+    return refusal_note($answer) unless $ok;
     return undef unless is_string($text);
 
-    # Lines and tabs stay; control and invisible characters go, as from
-    # any other text the hook passes on.
+    # Lines and tabs stay. Other line breaks become lines, other control
+    # characters become a space, so the words around them stay apart, and
+    # the invisible characters go, as from any other text the hook passes
+    # on.
     $text =~ s/\r\n?/\n/g;
+    $text =~ s/[\x0B\x0C\x{85}\x{2028}\x{2029}]/\n/g;
+    $text =~ s/[^\P{Cc}\n\t]+/ /g;
     $text =~ s/(?![\n\t])$UNSAFE//g;
     return undef unless $text =~ /\S/;
     return fit_context($text);
+}
+
+# The note for a refusal: that the briefing could not be sent, why, in
+# Flash Console's own words when it gave some, and how to start with the
+# command anyway. Flash Console refuses a briefing only when something is
+# wrong for now, such as too many requests at once; when FlashTeams for
+# agents is off or nobody is signed in it says so with ok true.
+sub refusal_note {
+    my ($answer) = @_;
+    my ($code, $message) = @{$answer}{qw(code message)};
+    my $why = is_string($message) ? excerpt_of($message) : undef;
+    $why //= "Its answer was $code." if is_string($code) && $code =~ /\A[a-z_]{1,32}\z/;
+    return "Flash Console could not send the FlashTeams briefing for this session."
+      . (defined $why ? " $why" : '')
+      . "\nThe flashteams command may still work: run flashteams tools for the list of tools"
+      . " and flashteams help <tool> for a tool's arguments.";
 }
 
 # Whether a decoded JSON value was a string, not a number, true, false,
@@ -578,16 +604,31 @@ sub is_string {
 }
 
 # Agents take at most CONTEXT_LIMIT characters of start-up context in one
-# piece. Flash Console keeps its briefing well under that, but a longer one
-# is cut at the end of a line and says how much was left out.
+# piece, counted the way JavaScript counts a string's length: in UTF-16
+# units, so a character past U+FFFF, such as most emoji, counts as two.
+# Flash Console keeps its briefing well under that, but a longer one is cut
+# at the end of a line and says how much was left out.
 sub fit_context {
     my ($text) = @_;
-    return $text if length($text) <= CONTEXT_LIMIT;
-    my $keep = substr($text, 0, CONTEXT_LIMIT - 64);
+    return $text if utf16_length($text) <= CONTEXT_LIMIT;
+    my $room = CONTEXT_LIMIT - 64;
+    my $keep = substr($text, 0, $room);
+    # Each character past U+FFFF in what is kept takes a second unit, so
+    # characters come off the end until it fits.
+    my $units = utf16_length($keep);
+    while ($units > $room) {
+        $units -= ord(chop $keep) > 0xFFFF ? 2 : 1;
+    }
     $keep =~ s/(?<=\n)[^\n]+\z//;
-    $keep .= "\n" unless $keep =~ /\n\z/;
     my $more = length($text) - length($keep);
+    $keep .= "\n" unless $keep =~ /\n\z/;
     return $keep . "[cut: $more more characters]";
+}
+
+# How long JavaScript, and so the agent, takes a text to be.
+sub utf16_length {
+    my ($text) = @_;
+    return length($text) + ($text =~ tr/\x{10000}-\x{10FFFF}//);
 }
 
 # Prints the briefing as the one JSON object both agents read from a
