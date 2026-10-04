@@ -1,12 +1,12 @@
 {
-  "description": "Tells Flash Console what Codex is doing, over a private socket on this computer.",
+  "description": "Tells Flash Console what Codex is doing, and brings in the FlashTeams briefing when a session starts, over a private socket on this computer.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex SessionStart",
+            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex SessionStart",
             "timeout": 5
           }
         ]

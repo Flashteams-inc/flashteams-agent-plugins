@@ -122,9 +122,12 @@ ok(!-e "$ROOT/$CODEX/$_", "the Codex plugin has no $_") for qw(.claude-plugin pl
 # event it is registered for, through a guard that exits 0 without a word
 # when the starter is missing or unreadable. Codex keeps running the hook
 # commands it read from a plugin folder after an update has deleted that
-# folder, and sh on a missing file complains and exits non-zero.
-my $GUARD = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; }
-  . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
+# folder, and sh on a missing file complains and exits non-zero. Only the
+# session start keeps stdout, for the briefing; every other hook discards
+# it as well as stderr.
+my $GUARD_START = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; };
+my $QUIET_GUARD = $GUARD_START . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
+my $BRIEFING_GUARD = $GUARD_START . q{sh "$f" "$@" 2>/dev/null; exit 0' sh};
 my %HOOKS = (
     claude => {
         file   => "$CLAUDE/hooks/hooks.json",
@@ -155,12 +158,19 @@ for my $agent (sort keys %HOOKS) {
         is(scalar @handlers, 1, "$agent $event has one handler");
         my $handler = $handlers[0];
         is($handler->{type}, 'command', "$agent $event is a command hook");
-        is($handler->{command}, qq{$GUARD "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $event},
-            "$agent $event starts the shared hook through the guard");
+        my $guard = $event eq 'SessionStart' ? $BRIEFING_GUARD : $QUIET_GUARD;
+        is($handler->{command}, qq{$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $event},
+            $event eq 'SessionStart'
+            ? "$agent $event starts the shared hook through the guard, keeping stdout for the briefing"
+            : "$agent $event starts the shared hook through the guard, with stdout discarded");
         ok(!exists $handler->{args}, "$agent $event runs through sh, so a missing Perl or starter stays quiet");
         ok(!$handler->{async}, "$agent $event runs in order");
         cmp_ok($handler->{timeout}, '<=', 5, "$agent $event has a short timeout");
     }
+    # The hook's longest run at a session start: the input, the status
+    # event and the briefing, well inside the agent's timeout.
+    cmp_ok($config->{hooks}{SessionStart}[0]{hooks}[0]{timeout}, '>=', 4,
+        "$agent SessionStart leaves time for the briefing");
 }
 
 # The copies in each plugin match shared/.

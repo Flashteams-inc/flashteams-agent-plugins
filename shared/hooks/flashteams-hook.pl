@@ -1,5 +1,7 @@
 #!/usr/bin/perl
-# FlashTeams agent hook: tells Flash Console what a coding agent is doing.
+# FlashTeams agent hook: tells Flash Console what a coding agent is doing,
+# and at the start of a session asks Flash Console for the agent's
+# FlashTeams briefing.
 #
 #   perl flashteams-hook.pl <agent> <hook-event>
 #
@@ -9,14 +11,18 @@
 #
 # The hook turns that input into one Flash Console agent event (protocol
 # version 1, described in the README) and writes it as one line of JSON to
-# Flash Console's private socket on this computer. Nothing else is sent
-# anywhere.
+# Flash Console's private socket on this computer. At a session start it
+# then sends one briefing request over the same socket and, when Flash
+# Console answers in time, prints the briefing for the agent to read.
+# Nothing is sent anywhere else.
 #
 # Rules this program keeps, whatever happens:
-#   - it never writes to stdout, so nothing it does becomes model context,
-#     and never to the terminal;
-#   - it never waits long: it gives up on the socket after 200 ms and on the
-#     whole run after a little under two seconds;
+#   - only a session start named on the command line writes to stdout, and
+#     then only one JSON object holding the briefing, after a good answer;
+#     every other hook writes nothing to stdout, and none to the terminal;
+#   - it never waits long: it gives up on a status event after 200 ms, on
+#     the briefing after 1.5 seconds, and on the whole run after 1.8
+#     seconds, or 3.3 at a session start;
 #   - it always exits 0, even when Flash Console is not running;
 #   - it reads at most 1 MB of input and never decodes a tool's whole input
 #     or output, only the few fields it needs;
@@ -40,6 +46,9 @@ use constant {
     PROTOCOL_VERSION => 1,
     MAX_INPUT        => 1024 * 1024,    # bytes of hook input read
     MAX_LINE         => 8192,           # bytes of the line sent, newline included
+    MAX_REQUEST      => 16384,          # bytes of a briefing request, newline included
+    MAX_REPLY        => 1024 * 1024,    # bytes of Flash Console's answer, newline included
+    CONTEXT_LIMIT    => 10000,          # characters of briefing an agent takes in one piece
     EXCERPT_LIMIT    => 320,            # characters in an excerpt
     NAME_LIMIT       => 64,
     ID_LIMIT         => 128,
@@ -48,8 +57,9 @@ use constant {
     RAW_ID_LIMIT     => 8192,           # longer ids and paths are dropped unread
     STDIN_SECONDS    => 1.0,            # longest wait for the agent's input
     SOCKET_SECONDS   => 0.2,            # longest wait to connect and write
+    BRIEFING_SECONDS => 1.5,            # longest wait for the briefing, connecting included
     DRAIN_SECONDS    => 0.3,            # longest time spent reading unused input
-    RUN_SECONDS      => 1.8,            # hard limit on the whole run
+    RUN_SECONDS      => 1.8,            # hard limit on the whole run, before the briefing
 };
 
 my $STARTED = Time::HiRes::time();
@@ -65,16 +75,26 @@ my $UNSAFE = qr/[\p{Cc}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{206
 my %ESCAPES = (q{"} => q{"}, q{\\} => q{\\}, q{/} => q{/}, b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
 
 $SIG{PIPE} = 'IGNORE';
+
+# Only a session start may answer the agent, on stdout, so only then is a
+# copy of stdout kept for the answer. Everything else this program might
+# print goes nowhere.
+my $ANSWER;
+if (($ARGV[1] // '') eq 'SessionStart') {
+    open($ANSWER, '>&', \*STDOUT) or undef $ANSWER;
+}
 open(STDOUT, '>', '/dev/null');
 open(STDERR, '>', '/dev/null');
 
+my $briefing;
 eval {
     local $SIG{ALRM} = sub { die "out of time\n" };
-    Time::HiRes::alarm(RUN_SECONDS);
-    run(@ARGV);
+    Time::HiRes::alarm(RUN_SECONDS + ($ANSWER ? BRIEFING_SECONDS : 0));
+    $briefing = run(@ARGV);
     Time::HiRes::alarm(0);
     1;
 };
+answer($briefing) if $ANSWER && defined $briefing;
 exit 0;
 
 sub run {
@@ -97,8 +117,14 @@ sub run {
         my $line = build_line($agent, $event, $in);
         send_line($socket, $line) if defined $line;
     }
+
+    # The status event goes first, so Flash Console hears of the session
+    # however long the briefing takes.
+    my $briefing;
+    $briefing = ask_briefing($socket, $agent, $in) if $ANSWER && $hook eq 'SessionStart';
+
     drain_input() unless $at_end;
-    return;
+    return $briefing;
 }
 
 # Where Flash Console listens: FLASH_CONSOLE_AGENT_SOCKET when it is an
@@ -408,6 +434,174 @@ sub send_line {
         last unless $select->can_write($left);
     }
     close($sock);
+    return;
+}
+
+# ---------------------------------------------------------------------------
+# The start-up briefing.
+#
+# At a session start the hook asks Flash Console for the agent's briefing:
+# how to reach FlashTeams through the flashteams command, whose sign-in it
+# uses, the task chosen in Flash Console, and how FlashTeams expects agents
+# to work. The request is one JSON line on the same socket, and Flash
+# Console answers with one JSON line on the same connection. Any trouble,
+# such as no answer in time, an older Flash Console that closes without a
+# word, or an answer that is not a good one, means no briefing and nothing
+# printed.
+
+sub ask_briefing {
+    my ($path, $agent, $in) = @_;
+    my $id = request_id();
+    my %request = (
+        v     => PROTOCOL_VERSION,
+        op    => 'briefing',
+        id    => $id,
+        agent => $agent,
+        cwd   => working_folder($in),
+        # As with status events, only Claude Code's environment names the
+        # pane the agent runs in.
+        pane => $agent eq 'claude' ? (clean($ENV{FLASH_CONSOLE_PANE}, ID_LIMIT) // '') : '',
+    );
+    my $source = $in->text('source', NAME_LIMIT);
+    $request{source} = $source if defined $source;
+
+    my $line = JSON::PP->new->utf8->canonical->encode(\%request) . "\n";
+    return undef if length($line) > MAX_REQUEST;
+    my $reply = exchange($path, $line, BRIEFING_SECONDS);
+    return undef unless defined $reply;
+    return briefing_text($reply, $id);
+}
+
+# A fresh id for one request, 32 hex digits.
+sub request_id {
+    my $bytes = '';
+    if (open(my $random, '<:raw', '/dev/urandom')) {
+        read($random, $bytes, 16);
+        close($random);
+    }
+    $bytes = pack('N4', map { int(rand(4294967296)) } 1 .. 4) unless length($bytes) == 16;
+    return unpack('H*', $bytes);
+}
+
+# The agent's working folder, from its input, else this program's own.
+sub working_folder {
+    my ($in) = @_;
+    my $cwd = $in->text('cwd', PATH_LIMIT);
+    return $cwd if defined $cwd && $cwd =~ m{^/};
+    require Cwd;
+    $cwd = clean(Cwd::getcwd(), PATH_LIMIT);
+    return defined $cwd && $cwd =~ m{^/} ? $cwd : '';
+}
+
+# Writes one request line and reads the one line that answers it, all
+# within $seconds. Returns the answer without its newline, or undef. An
+# answer cut short by the connection closing is returned as it is and
+# fails to decode later.
+sub exchange {
+    my ($path, $line, $seconds) = @_;
+    my $deadline = Time::HiRes::time() + $seconds;
+    my $sock = IO::Socket::UNIX->new(
+        Type    => SOCK_STREAM,
+        Peer    => $path,
+        Timeout => $seconds,
+    ) or return undef;
+    $sock->blocking(0);
+    my $select = IO::Select->new($sock);
+
+    my $sent = 0;
+    while ($sent < length($line)) {
+        my $left = $deadline - Time::HiRes::time();
+        return undef if $left <= 0;
+        my $n = syswrite($sock, $line, length($line) - $sent, $sent);
+        if (defined $n) {
+            $sent += $n;
+            next;
+        }
+        return undef unless $!{EAGAIN} || $!{EWOULDBLOCK} || $!{EINTR};
+        $select->can_write($left);
+    }
+
+    my $reply = '';
+    while (1) {
+        my $left = $deadline - Time::HiRes::time();
+        return undef if $left <= 0;
+        next unless $select->can_read($left);
+        my $before = length($reply);
+        my $n = sysread($sock, $reply, 65536, $before);
+        if (!defined $n) {
+            next if $!{EAGAIN} || $!{EWOULDBLOCK} || $!{EINTR};
+            return undef;
+        }
+        last if $n == 0;
+        my $end = index($reply, "\n", $before);
+        if ($end >= 0) {
+            substr($reply, $end) = '';
+            last;
+        }
+        return undef if length($reply) >= MAX_REPLY;
+    }
+    close($sock);
+    return length($reply) && length($reply) < MAX_REPLY ? $reply : undef;
+}
+
+# The briefing in a good answer to request $id, ready for the agent, or
+# undef. A good answer is a JSON object with v 1, the request's id, ok
+# true and some text.
+sub briefing_text {
+    my ($reply, $id) = @_;
+    my $answer = eval { JSON::PP->new->utf8->decode($reply) };
+    return undef unless ref $answer eq 'HASH';
+    my ($v, $answer_id, $ok, $text) = @{$answer}{qw(v id ok text)};
+    return undef unless defined $v && !ref $v && $v eq PROTOCOL_VERSION;
+    return undef unless is_string($answer_id) && $answer_id eq $id;
+    return undef unless ref $ok eq 'JSON::PP::Boolean' && $ok;
+    return undef unless is_string($text);
+
+    # Lines and tabs stay; control and invisible characters go, as from
+    # any other text the hook passes on.
+    $text =~ s/\r\n?/\n/g;
+    $text =~ s/(?![\n\t])$UNSAFE//g;
+    return undef unless $text =~ /\S/;
+    return fit_context($text);
+}
+
+# Whether a decoded JSON value was a string, not a number, true, false,
+# null, an array or an object. A number decodes to a Perl number, which
+# never carries text alone.
+sub is_string {
+    my ($value) = @_;
+    return 0 unless defined $value && !ref $value;
+    require B;
+    my $flags = B::svref_2object(\$value)->FLAGS;
+    return 0 if $flags & (B::SVp_IOK() | B::SVp_NOK());
+    return $flags & B::SVp_POK() ? 1 : 0;
+}
+
+# Agents take at most CONTEXT_LIMIT characters of start-up context in one
+# piece. Flash Console keeps its briefing well under that, but a longer one
+# is cut at the end of a line and says how much was left out.
+sub fit_context {
+    my ($text) = @_;
+    return $text if length($text) <= CONTEXT_LIMIT;
+    my $keep = substr($text, 0, CONTEXT_LIMIT - 64);
+    $keep =~ s/(?<=\n)[^\n]+\z//;
+    $keep .= "\n" unless $keep =~ /\n\z/;
+    my $more = length($text) - length($keep);
+    return $keep . "[cut: $more more characters]";
+}
+
+# Prints the briefing as the one JSON object both agents read from a
+# session start hook's stdout.
+sub answer {
+    my ($text) = @_;
+    eval {
+        my $json = JSON::PP->new->utf8->canonical->encode(
+            { hookSpecificOutput => { hookEventName => 'SessionStart', additionalContext => $text } });
+        binmode($ANSWER);
+        print {$ANSWER} $json, "\n";
+        close($ANSWER);
+        1;
+    };
     return;
 }
 

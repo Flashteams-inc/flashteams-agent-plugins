@@ -4,7 +4,9 @@
 # socket that stands in for Flash Console, and checks what arrives: the JSON
 # line, the caps, the cleaning, the flags, and that the hook stays silent and
 # quick when Flash Console is not there, when the plugin folder has gone, and
-# when the shell comes with options already on.
+# when the shell comes with options already on. At a session start the
+# stand-in also answers the briefing request, at once, slowly, in pieces,
+# badly or not at all, and the checks cover what the agent reads on stdout.
 
 use strict;
 use warnings;
@@ -108,18 +110,29 @@ sub agent_command {
     return (['sh', '-c', $command], { $ROOT_VARIABLE{$agent} => $root // $PLUGIN{$agent} });
 }
 
+# How the stand-in for Flash Console answers a request line (one with an
+# "op"), given the decoded request (undef when it is not JSON) and the line:
+# a list of steps, each [seconds after the request, bytes to write], after
+# which the connection closes; an empty list to close at once without a
+# word; or undef to hold the connection open and never answer. A step with
+# undef bytes closes the connection there. By default the stand-in closes
+# at once, as a Flash Console from before briefings does.
+my $OLD_FLASH_CONSOLE = sub { [] };
+
 # Runs one hook. Options: agent, hook, input (a hash is encoded as JSON),
 # env (undef removes a variable), root (the plugin folder the agent's command
 # names), command (instead of the agent's command), listener (undef for
-# none), keep_stdin_open, ascii.
+# none), answer (see above), keep_stdin_open, ascii.
 # Returns exit status (or "signal N" when a signal ended it), stdout, stderr,
-# the bytes the listener received, and how long the hook ran.
+# the status event bytes the listener received, the requests it received
+# (decoded, or the raw line when not JSON), and how long the hook ran.
 sub run_hook {
     my (%opt) = @_;
     my $agent = $opt{agent} // 'claude';
     my ($command, $agent_env) = $opt{command} ? ($opt{command}, {}) : agent_command($agent, $opt{hook}, $opt{root});
     my @command = @$command;
     my $listener = exists $opt{listener} ? $opt{listener} : $LISTENER;
+    my $answer = $opt{answer} // $OLD_FLASH_CONSOLE;
 
     my $input = $opt{input} // '';
     if (ref $input) {
@@ -146,7 +159,7 @@ sub run_hook {
 
     my $readers = IO::Select->new($out, $err);
     $readers->add($listener) if $listener;
-    my %got = (out => '', err => '');
+    my %got = (out => '', err => '', data => '', requests => []);
     my %clients;
     my $sent = 0;
     my $stdin_open = 1;
@@ -160,6 +173,26 @@ sub run_hook {
     };
     $finish_stdin->() if !length($input) && !$opt{keep_stdin_open};
 
+    # What one connection carried: a request, or a status event.
+    my $record = sub {
+        my ($data) = @_;
+        my ($line) = $data =~ /\A([^\n]*)/;
+        my $request = eval { $JSON->decode($line) };
+        if (ref $request eq 'HASH' && exists $request->{op}) {
+            push @{ $got{requests} }, $request;
+        }
+        else {
+            $got{data} .= $data;
+        }
+    };
+    my $hang_up = sub {
+        my ($key) = @_;
+        my $client = delete $clients{$key};
+        $readers->remove($client->{sock}) if $readers->exists($client->{sock});
+        close($client->{sock});
+        $record->($client->{data});
+    };
+
     while (time < $deadline) {
         if (!defined $ended && waitpid($pid, WNOHANG) == $pid) {
             $status = $? & 127 ? 'signal ' . ($? & 127) : $? >> 8;
@@ -170,7 +203,7 @@ sub run_hook {
 
         my $writers = IO::Select->new;
         $writers->add($in) if $stdin_open && $sent < length($input);
-        my ($can_read, $can_write) = IO::Select->select($readers, $writers, undef, 0.02);
+        my ($can_read, $can_write) = IO::Select->select($readers, $writers, undef, 0.01);
         for my $fh (@{ $can_write || [] }) {
             my $n = syswrite($in, $input, 65536, $sent);
             if (defined $n) {
@@ -184,26 +217,62 @@ sub run_hook {
         for my $fh (@{ $can_read || [] }) {
             if ($listener && $fh == $listener) {
                 my $client = $listener->accept or next;
-                $clients{ fileno($client) } = [$client, ''];
+                $clients{ fileno($client) } = { sock => $client, data => '' };
                 $readers->add($client);
                 next;
             }
             my $buffer;
             my $n = sysread($fh, $buffer, 65536);
             next if !defined $n && $!{EAGAIN};
-            if (!$n) {
-                $readers->remove($fh);
+            if ($fh == $out || $fh == $err) {
+                if (!$n) {
+                    $readers->remove($fh);
+                    next;
+                }
+                $got{ $fh == $out ? 'out' : 'err' } .= $buffer;
                 next;
             }
-            if ($fh == $out) { $got{out} .= $buffer }
-            elsif ($fh == $err) { $got{err} .= $buffer }
-            else { $clients{ fileno($fh) }[1] .= $buffer }
+            my $key = fileno($fh);
+            if (!$n) {
+                $hang_up->($key);
+                next;
+            }
+            my $client = $clients{$key};
+            $client->{data} .= $buffer;
+
+            # A whole request line: decide how to answer it.
+            next if $client->{asked} || $client->{data} !~ /\A([^\n]*)\n/;
+            my $line = $1;
+            my $request = eval { $JSON->decode($line) };
+            next unless ref $request eq 'HASH' && exists $request->{op};
+            $client->{asked} = time;
+            my $steps = $answer->($request, $line);
+            if (defined $steps) {
+                $client->{steps} = [@$steps];
+            }
+            else {
+                $client->{hold} = 1;
+            }
         }
+
+        # Answers that are due.
         for my $key (keys %clients) {
-            my ($client, $data) = @{ $clients{$key} };
-            next if $readers->exists($client);
-            $got{data} .= $data;
-            delete $clients{$key};
+            my $client = $clients{$key};
+            next unless $client->{steps};
+            while (@{ $client->{steps} } && time >= $client->{asked} + $client->{steps}[0][0]) {
+                my (undef, $bytes) = @{ shift @{ $client->{steps} } };
+                if (!defined $bytes) {
+                    @{ $client->{steps} } = ();
+                    last;
+                }
+                my $done = 0;
+                while ($done < length($bytes)) {
+                    my $n = syswrite($client->{sock}, $bytes, length($bytes) - $done, $done);
+                    last unless $n;    # the hook hung up
+                    $done += $n;
+                }
+            }
+            $hang_up->($key) unless @{ $client->{steps} };
         }
     }
     if (!defined $ended) {
@@ -212,6 +281,7 @@ sub run_hook {
         $status = 'killed';
         $ended = time;
     }
+    $hang_up->($_) for keys %clients;
 
     # Connections the hook made but this loop never got to accept.
     if ($listener) {
@@ -220,17 +290,18 @@ sub run_hook {
             $client->blocking(1);
             local $/;
             my $data = <$client>;
-            $got{data} .= $data // '';
+            $record->($data // '');
         }
         $listener->blocking(1);
     }
 
     return {
-        status  => $status,
-        stdout  => $got{out},
-        stderr  => $got{err},
-        data    => $got{data} // '',
-        seconds => $ended - $started,
+        status   => $status,
+        stdout   => $got{out},
+        stderr   => $got{err},
+        data     => $got{data},
+        requests => $got{requests},
+        seconds  => $ended - $started,
     };
 }
 
@@ -979,6 +1050,318 @@ quiet('no socket', env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" },
     is($run->{data}, '', 'no Perl: nothing sent');
 }
 
+# ---------------------------------------------------------------------------
+# The start-up briefing. At a session start the hook sends the status event,
+# then asks Flash Console for a briefing on the same socket and, given a
+# good answer within 1.5 seconds, prints it as the one JSON object both
+# agents read from a session start hook. Anything else prints nothing.
+
+my $BRIEFING = join("\n",
+    q{FlashTeams is available in this session through the flashteams command, using Ada's Flash Console sign-in (Example Co).},
+    q{How to use it: every FlashTeams tool is a subcommand: flashteams <tool> --<argument> <value>.},
+    q{Current task (chosen in Flash Console): Fix the "sign in" page \ again (task id 7d4c)},
+    q{},
+    qq{WORKING LOOP\n1. connect_workspace to a project.\n\tIndented, caf\x{e9}, \x{1F680}.},
+);
+
+# A good answer to a briefing request: its own id, ok and the text.
+sub good_answer {
+    my ($request, %fields) = @_;
+    return $JSON->encode({ v => 1, id => $request->{id}, ok => JSON::PP::true, text => $BRIEFING, %fields }) . "\n";
+}
+
+# A stand-in Flash Console that answers with good_answer after $delay
+# seconds, with any fields given in place of the usual ones.
+sub answers {
+    my ($delay, %fields) = @_;
+    return sub { [[$delay, good_answer($_[0], %fields)]] };
+}
+
+# Runs a session start the way the agent does. Options: agent, input (more
+# input fields), env, answer, command, listener, keep_stdin_open.
+sub session_start {
+    my (%opt) = @_;
+    my $agent = $opt{agent} // 'claude';
+    my %input = $agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT;
+    return run_hook(
+        agent  => $agent,
+        hook   => 'SessionStart',
+        input  => { %input, hook_event_name => 'SessionStart', source => 'startup', %{ $opt{input} || {} } },
+        env    => { %PANE, %{ $opt{env} || {} } },
+        answer => $opt{answer} // answers(0),
+        %opt{ grep { exists $opt{$_} } qw(command listener keep_stdin_open) },
+    );
+}
+
+# Checks a run printed one briefing object and nothing else, and returns
+# the briefing's text.
+sub briefing_of {
+    my ($run, $name) = @_;
+    is($run->{status}, 0,  "$name: exits 0");
+    is($run->{stderr}, '', "$name: nothing on stderr");
+    like($run->{stdout}, qr/\A\{"hookSpecificOutput":\{[^\n]*\}\}\n\z/, "$name: one JSON object on one line");
+    my $out = eval { $JSON->decode($run->{stdout}) };
+    ok(ref $out eq 'HASH', "$name: stdout is a JSON object") or return undef;
+    is_deeply([sort keys %$out], ['hookSpecificOutput'], "$name: only hookSpecificOutput");
+    my $specific = ref $out->{hookSpecificOutput} eq 'HASH' ? $out->{hookSpecificOutput} : {};
+    is_deeply([sort keys %$specific], [qw(additionalContext hookEventName)], "$name: the two fields agents read");
+    is($specific->{hookEventName}, 'SessionStart', "$name: for SessionStart");
+    return $specific->{additionalContext};
+}
+
+# Checks a run printed nothing, quickly.
+sub no_briefing {
+    my ($run, $name, $within) = @_;
+    is($run->{status}, 0,  "$name: exits 0");
+    is($run->{stdout}, '', "$name: nothing on stdout");
+    is($run->{stderr}, '', "$name: nothing on stderr");
+    cmp_ok($run->{seconds}, '<', $within // 2.2, "$name: quick");
+    return $run;
+}
+
+# The status event a run sent, decoded.
+sub status_of {
+    my ($run) = @_;
+    return $run->{data} eq '' ? undef : eval { $JSON->decode($run->{data}) };
+}
+
+my %REQUEST_FIELDS = map { $_ => 1 } qw(v op id agent cwd pane source);
+
+for my $agent (qw(claude codex)) {
+    my $run = session_start(agent => $agent);
+    my $text = briefing_of($run, "$agent briefing");
+    is($text, $BRIEFING, "$agent briefing: the text as Flash Console sent it, lines, tabs and all");
+    cmp_ok($run->{seconds}, '<', 1, "$agent briefing: quick");
+
+    my $status = status_of($run);
+    is($status && $status->{event},  'session_start', "$agent briefing: the status event is still sent");
+    is($status && $status->{source}, 'startup',       "$agent briefing: the status event keeps its source");
+
+    is(scalar @{ $run->{requests} }, 1, "$agent briefing: one request");
+    my $request = $run->{requests}[0];
+    my @unknown = grep { !$REQUEST_FIELDS{$_} } sort keys %$request;
+    is("@unknown", '', "$agent briefing: only request fields");
+    is($request->{v},     1,          "$agent briefing: protocol version 1");
+    is($request->{op},    'briefing', "$agent briefing: asks for the briefing");
+    like($request->{id},  qr/\A[0-9a-f]{16,64}\z/, "$agent briefing: a random hex id");
+    is($request->{agent}, $agent,     "$agent briefing: names the agent");
+    is($request->{cwd},   $CWD,       "$agent briefing: the agent's working folder");
+    is($request->{source}, 'startup', "$agent briefing: why the session started");
+    # Codex runs hooks in a shared background server whose environment may
+    # name another terminal's pane, so its requests never name one.
+    is($request->{pane}, $agent eq 'claude' ? 'pane-42' : '', "$agent briefing: the pane, from Claude Code only");
+
+    my $again = session_start(agent => $agent);
+    isnt($again->{requests}[0]{id}, $request->{id}, "$agent briefing: each request has its own id");
+
+    # The hook as the agent runs it, and the starter run on its own.
+    my $direct = run_hook(
+        command => ['sh', "$PLUGIN{$agent}/hooks/flashteams-hook.sh", $agent, 'SessionStart'],
+        input   => { ($agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT), hook_event_name => 'SessionStart' },
+        env     => \%PANE,
+        answer  => answers(0),
+    );
+    is(briefing_of($direct, "$agent starter on its own"), $BRIEFING, "$agent starter on its own: the briefing");
+}
+
+{
+    my $nopane = session_start(env => { FLASH_CONSOLE_PANE => undef });
+    briefing_of($nopane, 'claude briefing outside a pane');
+    is($nopane->{requests}[0]{pane}, '', 'claude briefing outside a pane: an empty pane');
+
+    for my $source (qw(startup resume clear compact fork)) {
+        my $run = session_start(input => { source => $source });
+        briefing_of($run, "briefing from $source");
+        is($run->{requests}[0]{source}, $source, "briefing from $source: source passed on");
+    }
+    my $none = session_start(input => { source => undef });
+    briefing_of($none, 'briefing without a source');
+    ok(!exists $none->{requests}[0]{source}, 'briefing without a source: no source field');
+
+    # A working folder the input does not give is the hook's own.
+    my $nocwd = session_start(input => { cwd => undef });
+    briefing_of($nocwd, 'briefing without a working folder');
+    like($nocwd->{requests}[0]{cwd}, qr{\A/}, 'briefing without a working folder: the hook\'s own folder');
+
+    my $deep = '/' . ("\x{1F680}" x 1000);
+    my $big = session_start(input => { cwd => $deep, session_id => 's' x 128 }, env => { FLASH_CONSOLE_PANE => 'p' x 128 });
+    briefing_of($big, 'briefing from a deep folder');
+    is($big->{requests}[0]{cwd}, $deep, 'briefing from a deep folder: the folder is sent whole');
+}
+
+# The text: lines and tabs stay, control and invisible characters go, and a
+# briefing longer than agents take in one piece is cut at a line end.
+{
+    my $messy = session_start(answer => answers(0,
+        text => "One\r\nTwo\rThree\x07\x1b[0m\x{202E}\x{200B}\x{2028}\x{FEFF}\tFour\x{85}"));
+    is(briefing_of($messy, 'messy briefing'), "One\nTwo\nThree[0m\tFour", 'messy briefing: cleaned');
+
+    my $nine = join("\n", ('n' x 99) x 90);
+    is(length($nine), 8999, 'a briefing of 8999 characters');
+    is(briefing_of(session_start(answer => answers(0, text => $nine)), 'briefing under 9000'), $nine,
+        'a briefing under 9000 characters is whole');
+
+    my $limit = 'L' x 10000;
+    is(briefing_of(session_start(answer => answers(0, text => $limit)), 'briefing of 10000'), $limit,
+        'a briefing of exactly 10000 characters is whole');
+
+    my $long = join("\n", map { sprintf('line %05d %s', $_, 'x' x 80) } 1 .. 500);
+    my $cut = briefing_of(session_start(answer => answers(0, text => $long)), 'long briefing');
+    cmp_ok(length($cut), '<=', 10000, 'long briefing: at most 10000 characters');
+    my ($kept, $more) = $cut =~ /\A(.*\n)\[cut: (\d+) more characters\]\z/s;
+    ok(defined $kept, 'long briefing: whole lines, then a note of what was cut');
+    is(substr($long, 0, length($kept // '')), $kept, 'long briefing: the start is kept as it was');
+    is($more, length($long) - length($kept // ''), 'long briefing: the note counts what was cut');
+
+    my $line = "\x{1F680}" x 20000;
+    my $one = briefing_of(session_start(answer => answers(0, text => $line)), 'one long line');
+    like($one, qr/\A\x{1F680}+\n\[cut: \d+ more characters\]\z/, 'one long line: cut where it must be, with the note');
+    cmp_ok(length($one), '<=', 10000, 'one long line: at most 10000 characters');
+
+    # Just under the 1 MiB answer limit is still read, and cut.
+    my $huge = 'h' x (1024 * 1024 - 200);
+    my $read = briefing_of(session_start(answer => answers(0, text => $huge)), 'answer just under 1 MiB');
+    like($read, qr/\Ah+\n\[cut: \d+ more characters\]\z/, 'answer just under 1 MiB: read and cut');
+
+    # The answer may come in pieces, and without a final newline before the
+    # connection closes.
+    my $pieces = sub {
+        my $whole = good_answer($_[0]);
+        return [[0, substr($whole, 0, 10)], [0.3, substr($whole, 10, 50)], [0.6, substr($whole, 60)]];
+    };
+    is(briefing_of(session_start(answer => $pieces), 'answer in pieces'), $BRIEFING, 'answer in pieces: read whole');
+    my $unended = sub { [[0, good_answer($_[0]) =~ s/\n\z//r]] };
+    is(briefing_of(session_start(answer => $unended), 'answer without a newline'), $BRIEFING,
+        'answer without a newline: read when the connection closes');
+    my $more_lines = sub { [[0, good_answer($_[0]) . "not json\n" . good_answer($_[0], text => 'second')]] };
+    is(briefing_of(session_start(answer => $more_lines), 'answer with more lines'), $BRIEFING,
+        'answer with more lines: only the first counts');
+
+    my $late_ok = session_start(answer => answers(1.0));
+    is(briefing_of($late_ok, 'answer after one second'), $BRIEFING, 'answer after one second: in time');
+}
+
+# Answers that give no briefing: nothing printed, quickly.
+{
+    my %bad = (
+        'an older Flash Console that closes without a word' => sub { [] },
+        'an answer that is not JSON'          => sub { [[0, "FlashTeams is available\n"]] },
+        'an answer that is a JSON array'      => sub { [[0, qq([1,2,3]\n)]] },
+        'an answer that is a JSON string'     => sub { [[0, qq("text"\n)]] },
+        'an answer cut short'                 => sub { [[0, substr(good_answer($_[0]), 0, 40)]] },
+        'a refusal'                           => sub {
+            [[0, $JSON->encode({ v => 1, id => $_[0]{id}, ok => JSON::PP::false, code => 'off',
+                message => 'FlashTeams for agents is off.' }) . "\n"]];
+        },
+        'ok given as a number'                => answers(0, ok => 1),
+        'ok given as a string'                => answers(0, ok => 'true'),
+        'another request\'s id'               => answers(0, id => 'f' x 32),
+        'no id'                               => answers(0, id => undef),
+        'another protocol version'            => answers(0, v => 2),
+        'no protocol version'                 => answers(0, v => undef),
+        'no text'                             => answers(0, text => undef),
+        'empty text'                          => answers(0, text => ''),
+        'text of only spaces and lines'       => answers(0, text => " \n\t\n "),
+        'text of only invisible characters'   => answers(0, text => "\x{200B}\x07\x{FEFF}"),
+        'text that is a number'               => answers(0, text => 42),
+        'text that is an object'              => answers(0, text => { a => 1 }),
+        'a status event in reply'             => sub { [[0, qq({"v":1,"event":"stop"}\n)]] },
+        'an answer over 1 MiB'                => answers(0, text => 'o' x (1024 * 1024)),
+        'invalid UTF-8'                       => sub { [[0, good_answer($_[0]) =~ s/WORKING/\xff\xfe/r]] },
+    );
+    for my $name (sort keys %bad) {
+        my $run = no_briefing(session_start(answer => $bad{$name}), $name);
+        my $status = status_of($run);
+        is($status && $status->{event}, 'session_start', "$name: the status event is still sent");
+    }
+
+    # Too slow: the hook gives up at 1.5 seconds and prints nothing.
+    for my $case (['an answer after 2.5 seconds', answers(2.5)], ['no answer at all', sub { undef }]) {
+        my ($name, $answer) = @$case;
+        my $run = no_briefing(session_start(answer => $answer), $name);
+        cmp_ok($run->{seconds}, '>=', 1.4, "$name: waits for the answer");
+        is(scalar @{ $run->{requests} }, 1, "$name: the request was sent");
+    }
+    my $drip = sub {
+        my $whole = good_answer($_[0]);
+        return [map { [0.2 * $_, substr($whole, $_ * 40, 40)] } 0 .. int(length($whole) / 40)];
+    };
+    no_briefing(session_start(answer => $drip), 'an answer that drips in too slowly');
+
+    # Flash Console not there or not answering.
+    no_briefing(session_start(env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" }, listener => undef),
+        'no socket at a session start', 1);
+    no_briefing(session_start(env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/stale.sock" }, listener => undef),
+        'a refused socket at a session start', 1);
+    my $silent = listen_on("$TMP/silent-start.sock");
+    no_briefing(session_start(env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/silent-start.sock" }, listener => undef),
+        'a socket that never accepts at a session start');
+    close($silent);
+
+    # Input that never ends and a Flash Console that never answers: the
+    # longest a session start can take, well inside the agent's timeout.
+    my $longest = no_briefing(session_start(answer => sub { undef }, keep_stdin_open => 1),
+        'the slowest session start', 3.5);
+}
+
+# Only a session start asks, and only a session start prints, even when
+# Flash Console would answer anything.
+{
+    for my $agent (sort keys %COMMAND) {
+        my %input = $agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT;
+        for my $hook (grep { $_ ne 'SessionStart' } sort keys %{ $COMMAND{$agent} }) {
+            my $run = run_hook(
+                agent  => $agent,
+                hook   => $hook,
+                input  => { %input, hook_event_name => $hook, tool_name => 'AskUserQuestion', prompt => 'hi' },
+                env    => \%PANE,
+                answer => answers(0),
+            );
+            is_deeply($run->{requests}, [], "$agent $hook: no briefing request");
+            is($run->{stdout}, '', "$agent $hook: nothing on stdout");
+        }
+    }
+
+    # A session start named only in the input, not on the command line.
+    my $named = run_hook(
+        command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude'],
+        input   => { %CLAUDE_INPUT, hook_event_name => 'SessionStart', source => 'startup' },
+        env     => \%PANE,
+        answer  => answers(0),
+    );
+    is(event_of($named, 'session start named in the input')->{event}, 'session_start',
+        'session start named in the input: the status event is sent');
+    is_deeply($named->{requests}, [], 'session start named in the input: no briefing request');
+
+    # Perl run on its own keeps to the same rule.
+    for my $hook (qw(SessionStart Stop)) {
+        my $run = run_hook(
+            command => ['perl', $HOOK_PL, 'claude', $hook],
+            input   => { %CLAUDE_INPUT, hook_event_name => 'SessionStart' },
+            env     => \%PANE,
+            answer  => answers(0),
+        );
+        if ($hook eq 'SessionStart') {
+            is(briefing_of($run, 'Perl on its own at a session start'), $BRIEFING,
+                'Perl on its own at a session start: the briefing');
+        }
+        else {
+            is($run->{stdout}, '', "Perl on its own for $hook with session start input: nothing on stdout");
+            is_deeply($run->{requests}, [], "Perl on its own for $hook with session start input: no request");
+        }
+    }
+
+    for my $args (['someone-else', 'SessionStart'], ['', 'SessionStart']) {
+        my $run = run_hook(
+            command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", @$args],
+            input   => { %CLAUDE_INPUT, hook_event_name => 'SessionStart' },
+            answer  => answers(0),
+        );
+        no_briefing($run, "starter for agent '$args->[0]'");
+        is_deeply($run->{requests}, [], "starter for agent '$args->[0]': no request");
+    }
+}
+
 # A hook program that cannot run: the starter still exits 0 and says
 # nothing, so the agent never shows a hook error. Each program runs from a
 # throwaway copy of the starter, never by changing the real files.
@@ -1001,6 +1384,45 @@ quiet('no socket', env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" },
 
         my $run = quiet($name, command => ['sh', "$dir/flashteams-hook.sh", 'claude', 'Stop'], listener => $LISTENER);
         is($run->{data}, '', "$name: nothing sent");
+
+        my $start = quiet("$name at a session start", command => ['sh', "$dir/flashteams-hook.sh", 'claude', 'SessionStart'],
+            listener => $LISTENER);
+        is($start->{data}, '', "$name at a session start: nothing sent");
+    }
+}
+
+# At a session start the starter passes on only what looks like one whole
+# briefing object, and only when the hook program finished well. A program
+# that prints anything else, fails or is killed leaves the agent nothing.
+{
+    my $object = q({"hookSpecificOutput":{"additionalContext":"x","hookEventName":"SessionStart"}});
+    my %programs = (
+        'one briefing object'                 => [1, "print q($object), qq{\\n};\n"],
+        'one briefing object, no newline'     => [1, "print q($object);\n"],
+        'noise'                               => [0, "print qq{noise\\n};\n"],
+        'noise before the object'             => [0, "print qq{noise }, q($object), qq{\\n};\n"],
+        'two objects'                         => [0, "print q($object), qq{\\n}, q($object), qq{\\n};\n"],
+        'half an object'                      => [0, "print substr(q($object), 0, 30);\n"],
+        'an object, then a failure'           => [0, "print q($object), qq{\\n};\nexit 3;\n"],
+        'an object, then death'               => [0, "print q($object), qq{\\n};\ndie qq{broke\\n};\n"],
+        'an object, then killed'              => [0, "\$| = 1;\nprint q($object), qq{\\n};\nkill 'KILL', \$\$;\nsleep 5;\n"],
+        'another hook\'s object'              => [0, "print q({\"decision\":\"block\"}), qq{\\n};\n"],
+    );
+    my $n = 0;
+    for my $name (sort keys %programs) {
+        my ($passes, $program) = @{ $programs{$name} };
+        my $dir = "$TMP/printing-" . ++$n . '/hooks';
+        make_path($dir);
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$dir/flashteams-hook.sh") or die $!;
+        write_file("$dir/flashteams-hook.pl", $program);
+        my $run = run_hook(command => ['sh', "$dir/flashteams-hook.sh", 'claude', 'SessionStart'], listener => undef);
+        is($run->{status}, 0,  "a hook program printing $name: exits 0");
+        is($run->{stderr}, '', "a hook program printing $name: nothing on stderr");
+        is($run->{stdout}, $passes ? "$object\n" : '',
+            $passes ? "a hook program printing $name: passed on" : "a hook program printing $name: nothing passed on");
+
+        my $other = run_hook(command => ['sh', "$dir/flashteams-hook.sh", 'claude', 'Stop'], listener => undef);
+        is($other->{stdout}, '', "a hook program printing $name for Stop: nothing passed on");
     }
 }
 
@@ -1117,8 +1539,8 @@ SKIP: {
     # to everything the command starts. (A shell that turned them off with
     # set would also take them out of the SHELLOPTS its children get.)
     my $agent_shell = sub {
-        my ($agent, $options, $root) = @_;
-        my ($command, $root_env) = agent_command($agent, 'Stop', $root);
+        my ($agent, $options, $root, $hook) = @_;
+        my ($command, $root_env) = agent_command($agent, $hook // 'Stop', $root);
         return (
             command  => [$command->[0], '-c', "exec env SHELLOPTS=$options $command->[2]"],
             root_env => $root_env,
@@ -1147,7 +1569,25 @@ SKIP: {
             my %gone = $agent_shell->($agent, $options, "$TMP/deleted-plugin");
             quiet("$agent with a deleted plugin folder and SHELLOPTS=$options", command => $gone{command},
                 env => { PATH => $path, %{ $gone{root_env} } }, listener => $LISTENER);
+
+            # A session start prints the briefing and nothing else: no trace.
+            my %start = $agent_shell->($agent, $options, undef, 'SessionStart');
+            my $briefed = session_start(agent => $agent, command => $start{command},
+                env => { PATH => $path, %{ $start{root_env} } });
+            is(briefing_of($briefed, "$agent briefing with SHELLOPTS=$options"), $BRIEFING,
+                "$agent briefing with SHELLOPTS=$options: the briefing");
+            my $started = session_start(agent => $agent, command => ['sh', "$PLUGIN{$agent}/hooks/flashteams-hook.sh",
+                $agent, 'SessionStart'], env => { %env });
+            is(briefing_of($started, "$agent starter run directly for a briefing with SHELLOPTS=$options"), $BRIEFING,
+                "$agent starter run directly for a briefing with SHELLOPTS=$options: the briefing");
+            my %gone_start = $agent_shell->($agent, $options, "$TMP/deleted-plugin", 'SessionStart');
+            no_briefing(session_start(agent => $agent, command => $gone_start{command},
+                env => { PATH => $path, %{ $gone_start{root_env} } }),
+                "$agent session start with a deleted plugin folder and SHELLOPTS=$options", 1.5);
         }
+        no_briefing(run_hook(command => ['sh', "$failing/hooks/flashteams-hook.sh", 'claude', 'SessionStart'],
+            env => \%env, input => { %CLAUDE_INPUT, hook_event_name => 'SessionStart' }, answer => answers(0)),
+            "a failing hook program at a session start with SHELLOPTS=$options", 1.5);
         quiet("a failing hook program with SHELLOPTS=$options",
             command => ['sh', "$failing/hooks/flashteams-hook.sh", 'claude', 'Stop'], env => \%env, listener => $LISTENER);
         quiet("the starter without arguments with SHELLOPTS=$options",
