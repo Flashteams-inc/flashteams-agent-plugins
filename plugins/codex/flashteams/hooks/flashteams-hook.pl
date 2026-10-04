@@ -16,17 +16,32 @@
 # Console answers in time, prints the briefing for the agent to read.
 # Nothing is sent anywhere else.
 #
+# One more mode, for Claude Code only, is not an agent event:
+#
+#   perl flashteams-hook.pl claude flashteams-permission
+#
+# Claude Code runs it before each Bash command (a PreToolUse hook). When the
+# command is one plain flashteams command, it prints the answer that lets
+# Claude Code run it without its own permission prompt, because Flash
+# Console already asks the person before the actions that need it. For
+# anything else it prints nothing, and Claude Code asks as usual. This mode
+# never talks to Flash Console.
+#
 # Rules this program keeps, whatever happens:
-#   - only a session start named on the command line writes to stdout, and
-#     then only one JSON object holding the briefing, after a good answer,
-#     or a short note that the briefing could not be sent, after a refusal;
-#     every other hook writes nothing to stdout, and none to the terminal;
+#   - only a session start or the permission check named on the command
+#     line writes to stdout: a session start one JSON object holding the
+#     briefing, after a good answer, or a short note that the briefing
+#     could not be sent, after a refusal; the permission check one fixed
+#     JSON object, and only for a plain flashteams command; every other
+#     hook writes nothing to stdout, and none to the terminal;
 #   - it never waits long: it gives up on a status event after 200 ms, on
 #     the briefing after 1.5 seconds, and on the whole run after 1.8
 #     seconds, or 3.3 at a session start;
 #   - it always exits 0, even when Flash Console is not running;
 #   - it reads at most 1 MB of input and never decodes a tool's whole input
-#     or output, only the few fields it needs;
+#     or output, only the few fields it needs, except that the permission
+#     check decodes the whole input of a command that looks like a
+#     flashteams command, to be sure of it;
 #   - it needs nothing but Perl and the modules that ship with it.
 
 use 5.010;
@@ -61,7 +76,15 @@ use constant {
     BRIEFING_SECONDS => 1.5,            # longest wait for the briefing, connecting included
     DRAIN_SECONDS    => 0.3,            # longest time spent reading unused input
     RUN_SECONDS      => 1.8,            # hard limit on the whole run, before the briefing
+    MAX_COMMAND      => 1024 * 1024,    # bytes of a Bash command the permission check accepts
+    PERMISSION_CHECK => 'flashteams-permission',    # the mode named on the command line
 };
+
+# What the permission check prints to let a flashteams command run without
+# Claude Code's prompt. flashteams-hook.sh passes on exactly this and
+# nothing else, so the two must match.
+my $ALLOW = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow",'
+  . '"permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}';
 
 my $STARTED = Time::HiRes::time();
 
@@ -75,28 +98,46 @@ my $UNSAFE = qr/[\p{Cc}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{206
 # What each JSON escape stands for.
 my %ESCAPES = (q{"} => q{"}, q{\\} => q{\\}, q{/} => q{/}, b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
 
-$SIG{PIPE} = 'IGNORE';
-
-# Only a session start may answer the agent, on stdout, so only then is a
-# copy of stdout kept for the answer. Everything else this program might
-# print goes nowhere.
+# Where an answer for the agent goes: a copy of stdout, kept only by a
+# session start and the permission check.
 my $ANSWER;
-if (($ARGV[1] // '') eq 'SessionStart') {
-    open($ANSWER, '>&', \*STDOUT) or undef $ANSWER;
-}
-open(STDOUT, '>', '/dev/null');
-open(STDERR, '>', '/dev/null');
 
-my $briefing;
-eval {
-    local $SIG{ALRM} = sub { die "out of time\n" };
-    Time::HiRes::alarm(RUN_SECONDS + ($ANSWER ? BRIEFING_SECONDS : 0));
-    $briefing = run(@ARGV);
-    Time::HiRes::alarm(0);
-    1;
-};
-answer($briefing) if $ANSWER && defined $briefing;
-exit 0;
+# Run as a program, this does its work and exits. Loaded with do or
+# require, as the tests do to check the permission check on its own, it
+# only defines the functions below.
+exit main(@ARGV) unless caller;
+
+sub main {
+    my @args = @_;
+    my $mode = $args[1] // '';
+    $SIG{PIPE} = 'IGNORE';
+
+    # Only a session start and the permission check may answer the agent,
+    # on stdout, so only then is a copy of stdout kept for the answer.
+    # Everything else this program might print goes nowhere.
+    if ($mode eq 'SessionStart' || $mode eq PERMISSION_CHECK) {
+        open($ANSWER, '>&', \*STDOUT) or undef $ANSWER;
+    }
+    open(STDOUT, '>', '/dev/null');
+    open(STDERR, '>', '/dev/null');
+
+    my ($briefing, $allow);
+    eval {
+        local $SIG{ALRM} = sub { die "out of time\n" };
+        Time::HiRes::alarm(RUN_SECONDS + ($ANSWER && $mode eq 'SessionStart' ? BRIEFING_SECONDS : 0));
+        if ($mode eq PERMISSION_CHECK) {
+            $allow = permission_check(@args);
+        }
+        else {
+            $briefing = run(@args);
+        }
+        Time::HiRes::alarm(0);
+        1;
+    };
+    answer($briefing) if $ANSWER && defined $briefing;
+    allow() if $ANSWER && $allow;
+    return 0;
+}
 
 sub run {
     my ($agent, $hook) = @_;
@@ -640,6 +681,167 @@ sub answer {
             { hookSpecificOutput => { hookEventName => 'SessionStart', additionalContext => $text } });
         binmode($ANSWER);
         print {$ANSWER} $json, "\n";
+        close($ANSWER);
+        1;
+    };
+    return;
+}
+
+# ---------------------------------------------------------------------------
+# The permission check for flashteams commands, Claude Code only.
+#
+# Claude Code asks the person before each Bash command that no rule allows,
+# and a skill's allowed-tools only lasts for the turn that loads the skill.
+# So without this, Claude Code would ask before every flashteams command,
+# on top of Flash Console, which itself asks the person before the actions
+# that need it: closing a project or phase, editing documentation, asking
+# FlashBrain and answering a FlashBrain approval.
+#
+# Claude Code runs this before each Bash command. It reads the hook input
+# and nothing else: no socket, no file, no network, and it sends Flash
+# Console no event. It answers allow only for a Bash command that is one
+# plain flashteams command (see flashteams_command_is_plain), and only
+# when the session is not planning and the command is not asking to run
+# outside Claude Code's sandbox. Anything else, including input it cannot
+# read, gets no answer, and Claude Code's usual permission flow decides.
+# Claude Code still applies the person's own deny and ask rules after an
+# allow.
+
+# Whether Claude Code may run this Bash command without asking. $agent is
+# the agent named on the command line.
+sub permission_check {
+    my ($agent) = @_;
+    return 0 unless ($agent // '') eq 'claude';
+
+    # The whole input, or no answer.
+    my ($input, $at_end) = read_input();
+    unless ($at_end) {
+        drain_input();
+        return 0;
+    }
+
+    # A quick look first, so that the many Bash commands that are not
+    # flashteams commands are turned away without decoding all of a long
+    # input. A flashteams command starts with the word flashteams, or with
+    # a quote and then the full path.
+    my $in = Input->new(\$input, scan_object(\$input, 0));
+    return 0 unless ($in->text('tool_name', ID_LIMIT) // '') eq 'Bash';
+    my $tool = $in->object('tool_input') or return 0;
+    my $start = $tool->excerpt('command');
+    return 0 unless defined $start && $start =~ m{\A(?:flashteams|['"]/)};
+
+    # Then the input as a whole, which must be one well-formed JSON object.
+    my $hook = eval { JSON::PP->new->utf8->decode($input) };
+    return 0 unless ref $hook eq 'HASH';
+    return 0 unless is_string($hook->{hook_event_name}) && $hook->{hook_event_name} eq 'PreToolUse';
+    return 0 unless is_string($hook->{tool_name}) && $hook->{tool_name} eq 'Bash';
+    my $bash = $hook->{tool_input};
+    return 0 unless ref $bash eq 'HASH' && is_string($bash->{command});
+
+    # Plan mode keeps Claude Code's prompt for any command that might
+    # change something, and running outside the sandbox is the person's
+    # call, so neither is answered.
+    return 0 if defined $hook->{permission_mode} && $hook->{permission_mode} eq 'plan';
+    return 0 if $bash->{dangerouslyDisableSandbox};
+
+    return flashteams_command_is_plain($bash->{command}, $ENV{HOME});
+}
+
+# Whether $command, a Bash tool command, is one plain flashteams command and
+# nothing more: no second command, no redirection, and nothing the shell
+# would expand or substitute, in bash or in zsh. $home is the person's home
+# folder, which gives the full path of Flash Console's own copy of the
+# command. Returns 1 or 0.
+#
+# It is strict on purpose: a command that is safe but written some other
+# way just gets Claude Code's usual prompt. The rules:
+#
+#   - At most MAX_COMMAND bytes, and no NUL character anywhere.
+#   - Spaces, tabs and line breaks may come before the command and after
+#     it. Between words, only spaces and tabs.
+#   - The first word is exactly flashteams, unquoted, or exactly
+#     "$home/Library/Application Support/Flash Console/bin/flashteams" in
+#     single or double quotes, with $home already filled in. Nothing comes
+#     before it: no cd, no VAR=value, no env or sudo.
+#   - Every other word is made of pieces written one after another:
+#       unquoted:      letters, digits and _ . / : = @ , % + - only;
+#       single-quoted: '...' holding anything but a single quote, line
+#                      breaks included;
+#       double-quoted: "..." holding no $, `, \ or !, so nothing in it is
+#                      expanded.
+#     A word may not start with an unquoted =, which zsh would replace
+#     with the path of a command.
+#   - So no ; & | < > ( ) { } [ ] * ? ~ # ! $ ` \ or line break outside
+#     quotes, and no character beyond ASCII, such as a lookalike of one of
+#     those.
+#   - One exception for long text, the quoted here-document the skill
+#     teaches: the last word is - and the command ends with
+#     " <<'NAME'" or ' <<"NAME"', where NAME is a letter or _ and then
+#     letters, digits or _, then a line break. The lines after it are the
+#     text, read exactly as written because NAME is quoted. Then comes a
+#     line that is exactly NAME, then at most one line break, and nothing
+#     else. No line of the text may be exactly NAME, which would end the
+#     here-document early and run what follows as commands. <<NAME
+#     unquoted, whose text the shell would expand, and <<-NAME are
+#     refused.
+sub flashteams_command_is_plain {
+    my ($command, $home) = @_;
+    return 0 unless defined $command && !ref $command;
+    return 0 if index($command, "\0") >= 0;
+    my $bytes = $command;
+    utf8::encode($bytes);
+    return 0 if length($bytes) > MAX_COMMAND;
+
+    # The first word: the name, or the full path in either kind of quotes,
+    # leaving out a kind of quotes the path itself cannot sit inside.
+    my @programs = ('flashteams');
+    if (defined $home && $home =~ m{\A/}) {
+        (my $base = $home) =~ s{/+\z}{};
+        my $path = "$base/Library/Application Support/Flash Console/bin/flashteams";
+        push @programs, "'$path'" unless $path =~ /'/;
+        push @programs, qq{"$path"} unless $path =~ /[\x22\x24\x5C\x60\x21]/;    # " $ \ ` !
+    }
+    my $program = join('|', map { quotemeta } @programs);
+
+    # One piece of a word: unquoted safe characters, a single-quoted
+    # string, or a double-quoted string with none of the characters
+    # \x22 \x24 \x5C \x60 \x21, which are the double quote, dollar sign,
+    # backslash, backtick and exclamation mark. The character classes
+    # list ASCII characters one by one, so no wider class lets in letters,
+    # digits or spaces from elsewhere in Unicode.
+    my $piece = qr{[A-Za-z0-9_./:=\@,%+\-]++|'[^']*+'|"[^\x22\x24\x5C\x60\x21]*+"};
+
+    pos($command) = 0;
+    $command =~ /\G[ \t\n]*/gc;
+    return 0 unless $command =~ /\G(?:$program)(?=[ \t\n]|\z)/gc;
+
+    my @words;
+    while ($command =~ /\G[ \t]++((?:$piece)++)/gc) {
+        push @words, $1;
+    }
+    return 0 if grep { /\A=/ } @words;
+
+    # The quoted here-document.
+    if ($command =~ /\G[ \t]++<<(['"])([A-Za-z_][A-Za-z0-9_]*+)\1\n/gc) {
+        my $name = $2;
+        return 0 unless @words && $words[-1] eq '-';
+        my $text = substr($command, pos($command));
+        $text =~ s/\n\z//;
+        my @lines = split(/\n/, $text, -1);
+        return 0 unless @lines && pop(@lines) eq $name;
+        return 0 if grep { $_ eq $name } @lines;
+        return 1;
+    }
+
+    return $command =~ /\G[ \t\n]*\z/ ? 1 : 0;
+}
+
+# Prints the permission check's answer, the JSON object that tells Claude
+# Code to run the command without asking.
+sub allow {
+    eval {
+        binmode($ANSWER);
+        print {$ANSWER} $ALLOW, "\n";
         close($ANSWER);
         1;
     };

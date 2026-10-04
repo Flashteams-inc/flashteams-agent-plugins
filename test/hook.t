@@ -62,14 +62,20 @@ my @INVISIBLE = map { chr } 0x061C, 0x200B .. 0x200F, 0x2060 .. 0x2064, 0xFEFF;
 my $UNSAFE = qr/[\x00-\x1f\x7f-\x9f\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/;
 
 # Each agent's hooks configuration: the command it runs for each hook, and
-# the variable that holds the plugin's folder in that command.
+# the variable that holds the plugin's folder in that command. A command is
+# known by the last word it hands the starter: the hook's own name, or for
+# Claude Code's permission check on Bash commands, flashteams-permission.
 my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
+my $PERMISSION = 'flashteams-permission';
 my %COMMAND;
 for my $agent (sort keys %PLUGIN) {
     open(my $fh, '<', "$PLUGIN{$agent}/hooks/hooks.json") or die $!;
     my $config = do { local $/; decode_json(<$fh>) };
     for my $hook (keys %{ $config->{hooks} }) {
-        $COMMAND{$agent}{$hook} = $config->{hooks}{$hook}[0]{hooks}[0]{command};
+        for my $handler (map { @{ $_->{hooks} } } @{ $config->{hooks}{$hook} }) {
+            my ($name) = $handler->{command} =~ / (\S+)\z/;
+            $COMMAND{$agent}{$name} = $handler->{command};
+        }
     }
 }
 
@@ -125,7 +131,8 @@ my $OLD_FLASH_CONSOLE = sub { [] };
 # none), answer (see above), keep_stdin_open, ascii.
 # Returns exit status (or "signal N" when a signal ended it), stdout, stderr,
 # the status event bytes the listener received, the requests it received
-# (decoded, or the raw line when not JSON), and how long the hook ran.
+# (decoded, or the raw line when not JSON), how many connections the hook
+# made, and how long the hook ran.
 sub run_hook {
     my (%opt) = @_;
     my $agent = $opt{agent} // 'claude';
@@ -159,7 +166,7 @@ sub run_hook {
 
     my $readers = IO::Select->new($out, $err);
     $readers->add($listener) if $listener;
-    my %got = (out => '', err => '', data => '', requests => []);
+    my %got = (out => '', err => '', data => '', requests => [], connections => 0);
     my %clients;
     my $sent = 0;
     my $stdin_open = 1;
@@ -217,6 +224,7 @@ sub run_hook {
         for my $fh (@{ $can_read || [] }) {
             if ($listener && $fh == $listener) {
                 my $client = $listener->accept or next;
+                $got{connections}++;
                 $clients{ fileno($client) } = { sock => $client, data => '' };
                 $readers->add($client);
                 next;
@@ -287,6 +295,7 @@ sub run_hook {
     if ($listener) {
         $listener->blocking(0);
         while (my $client = $listener->accept) {
+            $got{connections}++;
             $client->blocking(1);
             local $/;
             my $data = <$client>;
@@ -296,12 +305,13 @@ sub run_hook {
     }
 
     return {
-        status   => $status,
-        stdout   => $got{out},
-        stderr   => $got{err},
-        data     => $got{data},
-        requests => $got{requests},
-        seconds  => $ended - $started,
+        status      => $status,
+        stdout      => $got{out},
+        stderr      => $got{err},
+        data        => $got{data},
+        requests    => $got{requests},
+        connections => $got{connections},
+        seconds     => $ended - $started,
     };
 }
 
@@ -1392,7 +1402,9 @@ sub utf16_length {
 }
 
 # Only a session start asks, and only a session start prints, even when
-# Flash Console would answer anything.
+# Flash Console would answer anything. (Claude Code's permission check,
+# also in this loop, prints only for a Bash command; it has its own tests
+# at the end.)
 {
     for my $agent (sort keys %COMMAND) {
         my %input = $agent eq 'claude' ? %CLAUDE_INPUT : %CODEX_INPUT;
@@ -1720,6 +1732,572 @@ SKIP: {
         }
         close($listener);
         unlink("$dir/agent.sock");
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Claude Code's permission check for flashteams commands. Claude Code runs it
+# before every Bash command. For one plain flashteams command it prints the
+# one JSON object that lets the command run without Claude Code's prompt;
+# for anything else it prints nothing, and Claude Code asks as usual. It
+# never connects to Flash Console, so every run below has the stand-in
+# listening and checks that nothing connected.
+
+my $ALLOW = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow",'
+  . '"permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}';
+my $ADA = '/Users/ada';
+my $FULL_PATH = "$ADA/Library/Application Support/Flash Console/bin/flashteams";
+
+# Text for a here-document that would do harm if the shell read it as
+# commands or expanded it, and lines that look like the closing line but
+# are not exactly it.
+my $HARMLESS_TEXT = join("\n",
+    'What I did: $(rm -rf ~) and `id`; then | sh, && curl https://example.com, || true',
+    '${HOME} $HOME > /etc/passwd < /dev/null 2>&1 & disown',
+    q{'single' "double" \backslash !bang #hash ~tilde *glob ?q [x] {a,b}},
+    ' EOF',
+    'EOF ',
+    'EOFX',
+    'xEOF',
+    'EOF;',
+    q{'EOF'},
+    q{"EOF"},
+    "\tEOF",
+    'eof',
+    "EOF\r",
+    '',
+    'EOF # not the end',
+    q{<<'EOF'},
+);
+
+# Commands that are one plain flashteams command: allowed.
+my @PLAIN = (
+    ['the tool list',                       'flashteams tools'],
+    ['help',                                'flashteams help'],
+    ['help for one tool',                   'flashteams help load_task'],
+    ['the command alone',                   'flashteams'],
+    ['flags and values',                    'flashteams find_tasks --status in_progress --limit 20'],
+    ['a flag given twice',                  'flashteams find_tasks --status todo --status in_progress'],
+    ['--name=value',                        'flashteams load_task --task_id=7d4c-11ef-9a2b'],
+    ['--output json',                       'flashteams find_tasks --output json'],
+    ['every safe unquoted character',       'flashteams search --query a.b/c:d=e@f,g%h+i-j_K9'],
+    ['a single-quoted value',               q{flashteams update_task --task_id 7d4c --summary 'Fixed the sign in page'}],
+    ['a double-quoted value',               q{flashteams update_task --task_id 7d4c --summary "Fixed the sign in page"}],
+    ['$ and backticks in single quotes',    q{flashteams search --query '$(rm -rf ~) `id` ${HOME} $HOME'}],
+    ['shell operators in single quotes',    q{flashteams search --query 'a; b | c && d || e & f > g < h 2>&1 (i) {j} [k] * ? ~ # !'}],
+    ['shell operators in double quotes',    q{flashteams search --query "a; b | c && d || e & f > g < h (i) {j} [k] * ? ~ # '"}],
+    ['--json with single-quoted JSON',
+        q{flashteams create_task --json '{"title":"Price in $USD","note":"run `make` first, then $(echo hi)","tags":["a","b"]}'}],
+    [q{--name='value'},                     q{flashteams load_task --task_id='7d4c 11ef'}],
+    [q{--name="value"},                     q{flashteams load_task --task_id="7d4c 11ef"}],
+    ['quoted and unquoted pieces together', q{flashteams search --query=a'b c'"d e"f}],
+    ['empty quoted values',                 q{flashteams search --query '' --scope ""}],
+    ['line breaks in single quotes',        qq{flashteams update_task --summary 'line one\nline two\n'}],
+    ['line breaks in double quotes',        qq{flashteams update_task --summary "line one\nline two"}],
+    ['letters beyond ASCII in quotes',      qq{flashteams search --query 'caf\x{e9} \x{1F680} \x{37E}' --scope "na\x{ef}ve"}],
+    ['space and line breaks around it',     "  \n flashteams tools \t \n"],
+    ['tabs between words',                  "flashteams\thelp\tload_task"],
+    ['a - value with no here-document',     'flashteams update_task --closing_note -'],
+    ['the full path in single quotes',      "'$FULL_PATH' tools"],
+    ['the full path in double quotes',      qq{"$FULL_PATH" help load_task}],
+    ['the full path alone',                 "'$FULL_PATH'"],
+    ['a here-document',
+        qq{flashteams update_task --task_id 7d4c --action close --closing_note - <<'EOF'\nWhat I did.\nWhat is left.\nEOF}],
+    ['a here-document with a double-quoted name',
+        qq{flashteams update_task --task_id 7d4c --closing_note - <<"EOF"\nWhat I did.\nEOF}],
+    ['a here-document ending in a line break',
+        qq{flashteams update_task --closing_note - <<'EOF'\nWhat I did.\nEOF\n}],
+    ['a here-document whose text looks like shell',
+        qq{flashteams update_task --closing_note - <<'EOF'\n$HARMLESS_TEXT\nEOF}],
+    ['a here-document with no text',        qq{flashteams update_task --closing_note - <<'EOF'\nEOF}],
+    ['a here-document of blank lines',      qq{flashteams update_task --closing_note - <<'EOF'\n\n\nEOF}],
+    ['a here-document named with _ and digits',
+        qq{flashteams update_task --closing_note - <<'_NOTE_2'\nEOF\n_NOTE_2}],
+    ['a here-document after quoted arguments',
+        qq{flashteams graph_action --json '{"action":"add_evidence"}' --evidence - <<'EOF'\nTests pass.\nEOF}],
+    ['a here-document with the full path',
+        qq{'$FULL_PATH' update_task --closing_note - <<'EOF'\nDone.\nEOF\n}],
+    ['a long here-document',
+        "flashteams update_task --closing_note - <<'EOF'\n" . ("A line of the handoff, \$(not run) `not run`.\n" x 4000) . 'EOF'],
+    ['a long single-quoted value',          "flashteams search --query '" . ('x' x 100_000) . "'"],
+);
+
+# Commands that are anything else: no answer.
+my @NOT_PLAIN = (
+    ['nothing at all',                      ''],
+    ['only space',                          "  \t\n"],
+
+    # More than one command.
+    ['; then another command',              'flashteams tools; rm -rf ~'],
+    ['; with no space',                     'flashteams tools;id'],
+    ['two flashteams commands',             'flashteams tools; flashteams help'],
+    ['&& then another command',             'flashteams tools && rm -rf ~'],
+    ['|| then another command',             'flashteams tools || rm -rf ~'],
+    ['a pipe into a shell',                 'flashteams tools | sh'],
+    ['a pipe into flashteams',              'cat /etc/passwd | flashteams update_task --closing_note -'],
+    ['& to run in the background',         'flashteams tools &'],
+    ['& then another command',              'flashteams tools & rm -rf ~'],
+    ['& inside a word',                     'flashteams search --query a&id'],
+    ['a line break then another command',   "flashteams tools\nrm -rf ~"],
+    ['a line break then flashteams again',  "flashteams tools\nflashteams help"],
+    ['CRLF then another command',           "flashteams tools\r\nrm -rf ~"],
+    ['a carriage return',                   "flashteams tools\r"],
+    ['tabs around ;',                       "flashteams tools\t;\trm -rf ~"],
+    ['tabs around &&',                      "flashteams tools\t&&\tid"],
+    ['backslash-newline continuation',      "flashteams tools \\\nhelp"],
+    ['backslash-newline then ;',            "flashteams tools \\\n; id"],
+    ['a backslash escape',                  'flashteams search --query a\\;id'],
+    ['a trailing backslash',                'flashteams tools \\'],
+
+    # Expansion and substitution.
+    ['$(...) unquoted',                     'flashteams search --query $(id)'],
+    ['backticks unquoted',                  'flashteams search --query `id`'],
+    ['$(...) in double quotes',             'flashteams search --query "$(id)"'],
+    ['backticks in double quotes',          'flashteams search --query "`id`"'],
+    ['${...}',                              'flashteams search --query ${HOME}'],
+    ['${...} in double quotes',             'flashteams search --query "${HOME}"'],
+    ['$VAR',                                'flashteams search --query $HOME'],
+    ['$VAR in double quotes',               'flashteams search --query "$HOME"'],
+    ['$((...))',                            'flashteams search --query $((1+1))'],
+    [q{$'...' quoting},                     q{flashteams search --query $'\x41'}],
+    ['a backslash in double quotes',        q{flashteams search --query "a\"b"}],
+    ['! in double quotes',                  q{flashteams search --query "hi!"}],
+    ['history expansion',                   'flashteams search --query !!'],
+    ['a word starting with =',              'flashteams search --query =id'],
+    ['~ unquoted',                          'flashteams search --query ~/x'],
+    ['~user unquoted',                      'flashteams search --query ~root'],
+    ['* unquoted',                          'flashteams search --query *'],
+    ['? unquoted',                          'flashteams search --query a?'],
+    ['[...] unquoted',                      'flashteams search --query [ab]'],
+    ['{a,b} unquoted',                      'flashteams search --query {a,b}'],
+    ['^ unquoted',                          'flashteams search --query ^x'],
+    ['a # comment',                         'flashteams tools # a note'],
+    ['# inside a word',                     'flashteams search --query a#b'],
+
+    # Redirections.
+    ['> to a file',                         'flashteams tools > /tmp/out'],
+    ['> with no space',                     'flashteams tools>/tmp/out'],
+    ['>> to a file',                        'flashteams tools >> ~/.zshrc'],
+    ['< from a file',                       'flashteams update_task --closing_note - < /etc/passwd'],
+    ['2>&1',                                'flashteams tools 2>&1'],
+    ['&> to a file',                        'flashteams tools &> /tmp/out'],
+    ['>| to a file',                        'flashteams tools >| /tmp/out'],
+    ['process substitution <(...)',         'flashteams update_task --closing_note <(cat /etc/passwd)'],
+    ['process substitution >(...)',         'flashteams tools > >(sh)'],
+    ['a here-string',                       q{flashteams update_task --closing_note - <<< 'Done.'}],
+
+    # Grouping.
+    ['a subshell',                          '(flashteams tools)'],
+    ['a subshell after it',                 'flashteams tools; (id)'],
+    ['parentheses inside a word',           'flashteams search --query a(b)'],
+    ['a brace group',                       '{ flashteams tools; }'],
+
+    # Here-documents other than the quoted one.
+    ['an unquoted here-document name',      qq{flashteams update_task --closing_note - <<EOF\n\$(id)\nEOF}],
+    [q{<<- with a quoted name},             qq{flashteams update_task --closing_note - <<-'EOF'\nDone.\n\tEOF}],
+    ['a name partly quoted',                qq{flashteams update_task --closing_note - <<'E'OF\nDone.\nEOF}],
+    ['a name after a backslash',            qq{flashteams update_task --closing_note - <<\\EOF\nDone.\nEOF}],
+    ['mismatched quotes on the name',       qq{flashteams update_task --closing_note - <<'EOF"\nDone.\nEOF}],
+    ['a space before the name',             qq{flashteams update_task --closing_note - << 'EOF'\nDone.\nEOF}],
+    ['no space before <<',                  qq{flashteams update_task --closing_note -<<'EOF'\nDone.\nEOF}],
+    ['a name with a dash',                  qq{flashteams update_task --closing_note - <<'END-NOTE'\nDone.\nEND-NOTE}],
+    ['a name starting with a digit',        qq{flashteams update_task --closing_note - <<'1EOF'\nDone.\n1EOF}],
+    ['an empty name',                       qq{flashteams update_task --closing_note - <<''\nDone.\n}],
+    ['text after the closing line',         qq{flashteams update_task --closing_note - <<'EOF'\nDone.\nEOF\nrm -rf ~}],
+    ['a command on the closing line',       qq{flashteams update_task --closing_note - <<'EOF'\nDone.\nEOF; rm -rf ~}],
+    ['two line breaks after the closing line', qq{flashteams update_task --closing_note - <<'EOF'\nDone.\nEOF\n\n}],
+    ['the closing line early, then a command',
+        qq{flashteams update_task --closing_note - <<'EOF'\nDone.\nEOF\nrm -rf ~\nEOF}],
+    ['a here-document never closed',        qq{flashteams update_task --closing_note - <<'EOF'\nDone.}],
+    ['a here-document with no line at all', qq{flashteams update_task --closing_note - <<'EOF'\n}],
+    ['<< at the very end',                  q{flashteams update_task --closing_note - <<'EOF'}],
+    ['a second here-document',
+        qq{flashteams update_task --summary - --closing_note - <<'A' <<'B'\nOne.\nA\nTwo.\nB}],
+    ['a command after <<',                  qq{flashteams update_task --closing_note - <<'EOF'; id\nDone.\nEOF}],
+    ['space after the name',                qq{flashteams update_task --closing_note - <<'EOF' \nDone.\nEOF}],
+    ['CRLF line breaks',                    qq{flashteams update_task --closing_note - <<'EOF'\r\nDone.\r\nEOF\r\n}],
+    ['a here-document after a value, not -', qq{flashteams update_task --closing_note Done <<'EOF'\nDone.\nEOF}],
+    ['a here-document after a quoted -',    qq{flashteams update_task --closing_note '-' <<'EOF'\nDone.\nEOF}],
+    ['a here-document with no arguments',   qq{flashteams <<'EOF'\nDone.\nEOF}],
+
+    # Something before the command.
+    ['cd && first',                         'cd /tmp && flashteams tools'],
+    ['env first',                           'env flashteams tools'],
+    ['sudo first',                          'sudo flashteams tools'],
+    ['VAR=1 first',                         'FLASH_CONSOLE_BIN=/tmp flashteams tools'],
+    ['command first',                       'command flashteams tools'],
+    ['exec first',                          'exec flashteams tools'],
+    ['time first',                          'time flashteams tools'],
+    ['; first',                             '; flashteams tools'],
+
+    # Not the flashteams command.
+    ['flashteamsx',                         'flashteamsx tools'],
+    ['flashteams-cli',                      'flashteams-cli tools'],
+    ['FlashTeams',                          'FlashTeams tools'],
+    ['./flashteams',                        './flashteams tools'],
+    ['/tmp/flashteams',                     '/tmp/flashteams tools'],
+    ['the name in quotes',                  q{'flashteams' tools}],
+    ['quotes joined to the name',           q{flashteams'' tools}],
+    ['text joined to the name',             q{flashteams"x" tools}],
+    ['a quoted path somewhere else',        q{'/tmp/flashteams' tools}],
+    ['the path under another home',         q{'/Users/eve/Library/Application Support/Flash Console/bin/flashteams' tools}],
+    ['the path with ../',                   q{'/Users/ada/Library/Application Support/Flash Console/bin/../bin/flashteams' tools}],
+    ['the path with ./',                    q{'/Users/ada/Library/Application Support/Flash Console/./bin/flashteams' tools}],
+    ['the path with a doubled /',           q{'/Users/ada//Library/Application Support/Flash Console/bin/flashteams' tools}],
+    ['the path with $HOME in it',           q{"$HOME/Library/Application Support/Flash Console/bin/flashteams" tools}],
+    ['the path with ~ in it',               q{"~/Library/Application Support/Flash Console/bin/flashteams" tools}],
+    ['the path partly quoted',              q{/Users/ada/Library/'Application Support'/'Flash Console'/bin/flashteams tools}],
+    ['the path with text joined',           "'${FULL_PATH}'x tools"],
+    ['the path, unterminated',              "'$FULL_PATH tools"],
+
+    # Quotes left open.
+    ['an unterminated single quote',        q{flashteams search --query 'abc}],
+    ['an unterminated double quote',        q{flashteams search --query "abc}],
+
+    # Lookalikes and other characters.
+    ['a Greek question mark for ;',         "flashteams tools\x{37E} id"],
+    ['a full-width semicolon',              "flashteams tools\x{FF1B}id"],
+    ['full-width ampersands',               "flashteams tools \x{FF06}\x{FF06} id"],
+    ['a no-break space',                    "flashteams\x{A0}tools"],
+    ['an ideographic space',                "flashteams\x{3000}tools"],
+    ['a line separator',                    "flashteams tools\x{2028}id"],
+    ['letters beyond ASCII unquoted',       "flashteams search --query caf\x{e9}"],
+    ['digits beyond ASCII unquoted',        "flashteams search --query \x{663}"],
+    ['a vertical tab',                      "flashteams\x0Btools"],
+    ['a form feed',                         "flashteams\x0Ctools"],
+    ['a NUL',                               "flashteams tools\0; id"],
+    ['a NUL in quotes',                     "flashteams search --query 'a\0b'"],
+    ['a NUL in a here-document',            qq{flashteams update_task --closing_note - <<'EOF'\na\0b\nEOF}],
+    ['over 1 MiB',                          "flashteams search --query '" . ('x' x (1024 * 1024)) . "'"],
+);
+
+cmp_ok(scalar @PLAIN,     '>=', 25, 'at least 25 commands the check allows');
+cmp_ok(scalar @NOT_PLAIN, '>=', 40, 'at least 40 commands it does not');
+
+# Loads the hook program into a separate Perl, as a library, and asks its
+# flashteams_command_is_plain about each command, with $home as the home
+# folder. Returns one 1 or 0 per command.
+sub classify {
+    my ($home, @commands) = @_;
+    my $program = <<'PERL';
+use strict;
+use warnings;
+use JSON::PP;
+do $ARGV[0];
+die "cannot load the hook program: $@\n" if $@ || !defined &main::flashteams_command_is_plain;
+my $asked = JSON::PP->new->utf8->decode(do { local $/; <STDIN> });
+my @answers = map { main::flashteams_command_is_plain($_, $asked->{home}) ? 1 : 0 } @{ $asked->{commands} };
+print encode_json(\@answers);
+PERL
+    my $err = gensym;
+    my $pid = open3(my $in, my $out, $err, 'perl', '-e', $program, $HOOK_PL);
+    print $in $JSON->encode({ home => $home, commands => \@commands });
+    close($in);
+    my $answers = do { local $/; <$out> };
+    my $errors = do { local $/; <$err> };
+    waitpid($pid, 0);
+    is($errors, '', 'the hook program loads as a library without a word');
+    my $decoded = eval { decode_json($answers) };
+    return @{ $decoded || [] };
+}
+
+# The function on its own.
+{
+    my @cases = ((map { [@$_, 1] } @PLAIN), (map { [@$_, 0] } @NOT_PLAIN));
+    my @answers = classify($ADA, map { $_->[1] } @cases);
+    is(scalar @answers, scalar @cases, 'an answer for every command');
+    for my $i (0 .. $#cases) {
+        my ($name, $command, $plain) = @{ $cases[$i] };
+        is($answers[$i], $plain, $plain ? "plain: $name" : "not plain: $name")
+          or diag(length($command) > 300 ? substr($command, 0, 300) . '...' : $command);
+    }
+
+    # The full path comes from the home folder the hook is given, and only
+    # in the quotes the path can sit inside without being expanded.
+    my $path_for = sub { "$_[0]/Library/Application Support/Flash Console/bin/flashteams" };
+    my @homes = (
+        ['no home folder',               undef,             [q{flashteams tools} => 1, qq{'$FULL_PATH' tools} => 0]],
+        ['a relative home folder',       'Users/ada',       [q{'Users/ada/Library/Application Support/Flash Console/bin/flashteams' tools} => 0]],
+        ['a home folder ending in /',    '/Users/ada/',     [qq{'$FULL_PATH' tools} => 1, qq{"$FULL_PATH" tools} => 1]],
+        [q{a home folder with '},        q{/Users/o'neil},  ["'" . $path_for->(q{/Users/o'neil}) . "' tools" => 0,
+                                                             '"' . $path_for->(q{/Users/o'neil}) . '" tools' => 1]],
+        ['a home folder with $',         '/Users/a$b',      ["'" . $path_for->('/Users/a$b') . "' tools" => 1,
+                                                             '"' . $path_for->('/Users/a$b') . '" tools' => 0]],
+        ['a home folder with a backtick', '/Users/a`b',     ['"' . $path_for->('/Users/a`b') . '" tools' => 0]],
+        ['a home folder with a backslash', '/Users/a\\b',   ['"' . $path_for->('/Users/a\\b') . '" tools' => 0]],
+        ['a home folder with !',         '/Users/a!b',      ['"' . $path_for->('/Users/a!b') . '" tools' => 0]],
+        ['a home folder with "',         '/Users/a"b',      ['"' . $path_for->('/Users/a"b') . '" tools' => 0]],
+    );
+    for my $home (@homes) {
+        my ($name, $folder, $pairs) = @$home;
+        my @pairs = @$pairs;
+        my @commands = @pairs[ grep { !($_ % 2) } 0 .. $#pairs ];
+        my @expected = @pairs[ grep { $_ % 2 } 0 .. $#pairs ];
+        my @got = classify($folder, @commands);
+        is_deeply(\@got, \@expected, "$name: the full path only where it is exact and safe")
+          or diag(explain([\@commands, \@got]));
+    }
+}
+
+# The hook as Claude Code runs it, with the command from hooks.json.
+my %BASH_INPUT = (%CLAUDE_INPUT, hook_event_name => 'PreToolUse', tool_name => 'Bash', tool_use_id => 'toolu_09');
+
+sub bash_input {
+    my ($command, %more) = @_;
+    return { %BASH_INPUT, tool_input => { command => $command, description => 'Run it' }, %more };
+}
+
+# Runs the permission check. Options: input (a hash or text), env, command,
+# root, listener, keep_stdin_open, ascii, as for run_hook. HOME is Ada's.
+sub permission_check {
+    my (%opt) = @_;
+    return run_hook(
+        agent => 'claude',
+        hook  => $PERMISSION,
+        env   => { HOME => $ADA, %{ $opt{env} || {} } },
+        %opt{ grep { exists $opt{$_} } qw(input command root listener keep_stdin_open ascii) },
+    );
+}
+
+# Checks a run printed the allow answer, exactly, and nothing else.
+sub allowed {
+    my ($run, $name) = @_;
+    is($run->{status}, 0,  "$name: exits 0");
+    is($run->{stderr}, '', "$name: nothing on stderr");
+    is($run->{stdout}, "$ALLOW\n", "$name: prints the allow answer, exactly");
+    is($run->{connections}, 0, "$name: no connection to Flash Console");
+    return $run;
+}
+
+# Checks a run printed nothing at all.
+sub not_allowed {
+    my ($run, $name) = @_;
+    is($run->{status}, 0,  "$name: exits 0");
+    is($run->{stderr}, '', "$name: nothing on stderr");
+    is($run->{stdout}, '', "$name: prints nothing, so Claude Code asks as usual");
+    is($run->{connections}, 0, "$name: no connection to Flash Console");
+    return $run;
+}
+
+{
+    is($COMMAND{claude}{$PERMISSION} =~ s/ $PERMISSION\z/ SessionStart/r, $COMMAND{claude}{SessionStart},
+        'the permission check starts through the same guard as the session start, keeping stdout');
+
+    my $answer = decode_json($ALLOW);
+    is_deeply($answer, { hookSpecificOutput => { hookEventName => 'PreToolUse', permissionDecision => 'allow',
+        permissionDecisionReason => 'A flashteams command; Flash Console asks before changes that need it.' } },
+        'the allow answer is the PreToolUse decision Claude Code reads');
+
+    for my $case (@PLAIN) {
+        my ($name, $command) = @$case;
+        allowed(permission_check(input => bash_input($command)), "hook, plain: $name");
+    }
+    for my $case (@NOT_PLAIN) {
+        my ($name, $command) = @$case;
+        not_allowed(permission_check(input => bash_input($command)), "hook, not plain: $name");
+    }
+
+    # Non-ASCII written as \u escapes, as some writers of JSON do.
+    allowed(permission_check(input => bash_input(qq{flashteams search --query 'caf\x{e9} \x{1F680}'}), ascii => 1),
+        'hook: \\u escapes in the input');
+
+    # Fast: the whole run, both shells and Perl included.
+    my @seconds = sort { $a <=> $b }
+      map { allowed(permission_check(input => bash_input('flashteams help load_task')), "hook, quick run $_")->{seconds} }
+      1 .. 5;
+    cmp_ok($seconds[2], '<', 0.5, 'hook: quick') or diag("@seconds");
+}
+
+# The input around the command.
+{
+    my $good = $JSON->encode(bash_input('flashteams tools'));
+    allowed(permission_check(input => $good), 'the input as Claude Code writes it');
+
+    my %bad_input = (
+        'input that is not JSON'          => 'this is not json',
+        'no input'                        => '',
+        'JSON cut short'                  => substr($good, 0, -1),
+        'JSON with more after it'         => "$good x",
+        'two JSON objects'                => "$good$good",
+        'a JSON array'                    => "[$good]",
+        'a raw control character in the command' =>
+          '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"flashteams tools' . "\x01" . '"}}',
+        'a bad escape in the command'     =>
+          '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"flashteams tools\q"}}',
+        'bytes that are not UTF-8'        =>
+          '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"flashteams search \'' . "\xC3\x28" . '\'"}}',
+    );
+    for my $name (sort keys %bad_input) {
+        not_allowed(permission_check(input => $bad_input{$name}), $name);
+    }
+
+    my %bash = %BASH_INPUT;
+    my %other_input = (
+        'another tool'                    => { %bash, tool_name => 'Write', tool_input => { command => 'flashteams tools' } },
+        'bash in lower case'              => { %bash, tool_name => 'bash',  tool_input => { command => 'flashteams tools' } },
+        'no tool name'                    => { %bash, tool_name => undef,   tool_input => { command => 'flashteams tools' } },
+        'a tool name that is a list'      => { %bash, tool_name => ['Bash'], tool_input => { command => 'flashteams tools' } },
+        'no tool input'                   => { %bash },
+        'a tool input that is text'       => { %bash, tool_input => 'flashteams tools' },
+        'no command'                      => { %bash, tool_input => { description => 'flashteams tools' } },
+        'a null command'                  => { %bash, tool_input => { command => undef } },
+        'a command that is a number'      => { %bash, tool_input => { command => 5 } },
+        'a command that is a list'        => { %bash, tool_input => { command => ['flashteams', 'tools'] } },
+        'a command that is an object'     => { %bash, tool_input => { command => { program => 'flashteams' } } },
+        'another hook'                    => bash_input('flashteams tools', hook_event_name => 'PostToolUse'),
+        'no hook name'                    => bash_input('flashteams tools', hook_event_name => undef),
+        'plan mode'                       => bash_input('flashteams tools', permission_mode => 'plan'),
+        'outside the sandbox'             => { %bash, tool_input => { command => 'flashteams tools', dangerouslyDisableSandbox => JSON::PP::true } },
+    );
+    for my $name (sort keys %other_input) {
+        my $input = $other_input{$name};
+        delete $input->{$_} for grep { !defined $input->{$_} } keys %$input;
+        not_allowed(permission_check(input => $input), $name);
+    }
+
+    for my $mode (qw(default acceptEdits auto dontAsk bypassPermissions)) {
+        allowed(permission_check(input => bash_input('flashteams tools', permission_mode => $mode)), "permission mode $mode");
+    }
+    allowed(permission_check(input => { %bash, tool_input => { command => 'flashteams tools', dangerouslyDisableSandbox => JSON::PP::false,
+        run_in_background => JSON::PP::true, timeout => 120000, description => 'List the tools' } }),
+        'the other Bash fields, inside the sandbox');
+
+    # Keys in the order Claude Code writes them, the command near the end.
+    allowed(permission_check(input => ordered_json(session_id => 'abc123', transcript_path => '/t.jsonl', cwd => $CWD,
+        permission_mode => 'default', hook_event_name => 'PreToolUse', tool_name => 'Bash',
+        tool_input => { command => 'flashteams help', description => 'Help' }, tool_use_id => 'toolu_1')),
+        'keys in Claude Code\'s order');
+
+    my $open = not_allowed(permission_check(input => bash_input('flashteams tools'), keep_stdin_open => 1),
+        'input that never ends');
+    cmp_ok($open->{seconds}, '<', 2.5, 'input that never ends: gives up waiting');
+
+    my $huge = not_allowed(permission_check(input => bash_input("flashteams search --query '" . ('x' x (2 * 1024 * 1024)) . "'")),
+        'input of several megabytes');
+    cmp_ok($huge->{seconds}, '<', 2.5, 'input of several megabytes: quick');
+}
+
+# Flash Console has no part in it: the answer is the same when it is not
+# running, and the socket is never opened.
+{
+    my $input = bash_input('flashteams tools');
+    allowed(permission_check(input => $input, env => { FLASH_CONSOLE_AGENT_SOCKET => "$TMP/missing.sock" }, listener => undef),
+        'Flash Console not running');
+    allowed(permission_check(input => $input, env => { FLASH_CONSOLE_AGENT_SOCKET => undef }),
+        'no socket named');
+
+    # Without a home folder there is no full path, and the name still works.
+    allowed(permission_check(input => $input, env => { HOME => undef }), 'no home folder: the name');
+    not_allowed(permission_check(input => bash_input("'$FULL_PATH' tools"), env => { HOME => undef }),
+        'no home folder: the full path');
+    allowed(permission_check(input => bash_input("'$TMP/Library/Application Support/Flash Console/bin/flashteams' tools"),
+        env => { HOME => $TMP }), 'the full path follows HOME');
+
+    # Codex has no permission check: its approvals are about its sandbox.
+    not_allowed(permission_check(command => ['sh', "$PLUGIN{codex}/hooks/flashteams-hook.sh", 'codex', $PERMISSION],
+        input => $input), 'the permission check for Codex');
+    not_allowed(permission_check(command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", '', $PERMISSION],
+        input => $input), 'the permission check for no agent');
+
+    # The starter and Perl on their own keep to the same answer.
+    allowed(permission_check(command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude', $PERMISSION],
+        input => $input), 'the starter on its own');
+    allowed(permission_check(command => ['perl', $HOOK_PL, 'claude', $PERMISSION], input => $input), 'Perl on its own');
+    not_allowed(permission_check(command => ['perl', $HOOK_PL, 'claude', 'PreToolUse'], input => $input),
+        'Perl for an ordinary PreToolUse hook');
+}
+
+# When the hook cannot run, nothing is printed and Claude Code asks as
+# usual: no Perl, a missing module, a hook program that breaks, or a plugin
+# folder that has gone.
+{
+    my $input = bash_input('flashteams tools');
+    not_allowed(permission_check(command => ['/bin/sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude', $PERMISSION],
+        env => { PATH => "$TMP/no-programs" }, input => $input), 'permission check without Perl');
+    not_allowed(permission_check(env => { PERL5LIB => "$TMP/perl-without-json-pp" }, input => $input),
+        'permission check with a missing module');
+
+    for my $what ('deleted-plugin', 'no-starter-claude', 'no-program-claude', 'locked-plugin') {
+        next if $what eq 'locked-plugin' && $> == 0;
+        my $folder = "$TMP/$what";
+        chmod(0000, "$folder/hooks/flashteams-hook.sh") if $what eq 'locked-plugin';
+        not_allowed(permission_check(root => $folder, input => $input), "permission check from $what");
+        chmod(0644, "$folder/hooks/flashteams-hook.sh") if $what eq 'locked-plugin';
+    }
+
+    my %programs = (
+        'a hook program that does not compile' => "use strict;\nmy \$broken = (;\n",
+        'a hook program that dies'              => "die qq{the hook broke\\n};\n",
+        'a hook program killed by a signal'     => "kill 'KILL', \$\$;\nsleep 5;\n",
+    );
+    my $n = 0;
+    for my $name (sort keys %programs) {
+        my $dir = "$TMP/broken-permission-" . ++$n . '/hooks';
+        make_path($dir);
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$dir/flashteams-hook.sh") or die $!;
+        write_file("$dir/flashteams-hook.pl", $programs{$name});
+        not_allowed(permission_check(command => ['sh', "$dir/flashteams-hook.sh", 'claude', $PERMISSION], input => $input),
+            "permission check with $name");
+    }
+}
+
+# The starter passes on the allow answer only when the hook program
+# finished well and printed exactly that answer.
+{
+    my $deny = $ALLOW =~ s/"allow"/"deny"/r;
+    my $ask = $ALLOW =~ s/"allow"/"ask"/r;
+    my $other_reason = $ALLOW =~ s/A flashteams command/Any command/r;
+    my $changed = $ALLOW =~ s/\}\}\z/,"updatedInput":{"command":"id"}}}/r;
+    my $briefing = q({"hookSpecificOutput":{"additionalContext":"x","hookEventName":"SessionStart"}});
+    my %programs = (
+        'the allow answer'                  => [1, "print q($ALLOW), qq{\\n};\n"],
+        'the allow answer, no newline'      => [1, "print q($ALLOW);\n"],
+        'a deny answer'                     => [0, "print q($deny), qq{\\n};\n"],
+        'an ask answer'                     => [0, "print q($ask), qq{\\n};\n"],
+        'an allow with another reason'      => [0, "print q($other_reason), qq{\\n};\n"],
+        'an allow that changes the command' => [0, "print q($changed), qq{\\n};\n"],
+        'a briefing'                        => [0, "print q($briefing), qq{\\n};\n"],
+        'noise before the allow answer'     => [0, "print qq{noise }, q($ALLOW), qq{\\n};\n"],
+        'the allow answer twice'            => [0, "print q($ALLOW), qq{\\n}, q($ALLOW), qq{\\n};\n"],
+        'the allow answer, then a failure'  => [0, "print q($ALLOW), qq{\\n};\nexit 3;\n"],
+        'the allow answer, then killed'     => [0, "\$| = 1;\nprint q($ALLOW), qq{\\n};\nkill 'KILL', \$\$;\nsleep 5;\n"],
+    );
+    my $n = 0;
+    for my $name (sort keys %programs) {
+        my ($passes, $program) = @{ $programs{$name} };
+        my $dir = "$TMP/permission-printing-" . ++$n . '/hooks';
+        make_path($dir);
+        copy("$ROOT/shared/hooks/flashteams-hook.sh", "$dir/flashteams-hook.sh") or die $!;
+        write_file("$dir/flashteams-hook.pl", $program);
+        my $run = run_hook(command => ['sh', "$dir/flashteams-hook.sh", 'claude', $PERMISSION], listener => undef);
+        is($run->{status}, 0,  "a hook program printing $name: exits 0");
+        is($run->{stderr}, '', "a hook program printing $name: nothing on stderr");
+        is($run->{stdout}, $passes ? "$ALLOW\n" : '',
+            $passes ? "a hook program printing $name: passed on" : "a hook program printing $name: nothing passed on");
+    }
+}
+
+# Shell options from an exported SHELLOPTS, which bash takes also when it
+# runs as sh, change nothing: the same answer, and no trace.
+SKIP: {
+    my ($bash) = grep { -x } map { "$_/bash" } split(/:/, $ENV{PATH}), '/bin';
+    skip 'bash is not installed', 1 unless $bash;
+    my $path = "$TMP/bash-as-sh:$ENV{PATH}";
+    my $input = bash_input('flashteams tools');
+    for my $options ('errexit:xtrace', 'errexit:nounset:xtrace') {
+        my ($command, $root_env) = agent_command('claude', $PERMISSION);
+        allowed(permission_check(command => [$command->[0], '-c', "exec env SHELLOPTS=$options $command->[2]"],
+            env => { PATH => $path, %$root_env }, input => $input), "permission check with SHELLOPTS=$options");
+        allowed(permission_check(command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude', $PERMISSION],
+            env => { PATH => $path, SHELLOPTS => $options }, input => $input),
+            "permission check, starter run directly, with SHELLOPTS=$options");
+        not_allowed(permission_check(command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude', $PERMISSION],
+            env => { PATH => $path, SHELLOPTS => $options }, input => bash_input('flashteams tools; id')),
+            "permission check refusing, with SHELLOPTS=$options");
+        my ($gone, $gone_env) = agent_command('claude', $PERMISSION, "$TMP/deleted-plugin");
+        not_allowed(permission_check(command => [$gone->[0], '-c', "exec env SHELLOPTS=$options $gone->[2]"],
+            env => { PATH => $path, %$gone_env }, input => $input),
+            "permission check from a deleted plugin folder with SHELLOPTS=$options");
     }
 }
 

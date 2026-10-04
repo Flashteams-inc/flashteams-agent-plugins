@@ -77,10 +77,10 @@ Pass it only when that time is wrong, for example when the task sat
 started while nobody worked on it, and then give the real time worked,
 never an estimate.
 
-Ask the person before you run `complete_project`, `complete_phase` or
-`respond_to_approval`, unless they already told you to. The first two
-close work for the whole team, and the last decides for a FlashBrain run;
-none is easy to undo.
+Flash Console asks the person before closing a project or phase, editing
+documentation, asking FlashBrain, or answering a FlashBrain approval; wait
+for that answer, and if the person declines (exit 1), do not try again
+unless they ask.
 
 ## When a command fails
 

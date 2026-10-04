@@ -197,59 +197,109 @@ for my $name (qw(flashteams flashteams-mcp)) {
 # event it is registered for, through a guard that exits 0 without a word
 # when the starter is missing or unreadable. Codex keeps running the hook
 # commands it read from a plugin folder after an update has deleted that
-# folder, and sh on a missing file complains and exits non-zero. Only the
-# session start keeps stdout, for the briefing; every other hook discards
-# it as well as stderr.
+# folder, and sh on a missing file complains and exits non-zero. Only two
+# commands keep stdout: the session start, for the briefing, and Claude
+# Code's permission check on Bash commands (flashteams-permission), for
+# the answer that lets a plain flashteams command run without Claude Code's
+# prompt. Every other hook discards stdout as well as stderr.
 
 my $GUARD_START = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; };
 my $QUIET_GUARD = $GUARD_START . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
-my $BRIEFING_GUARD = $GUARD_START . q{sh "$f" "$@" 2>/dev/null; exit 0' sh};
+my $STDOUT_GUARD = $GUARD_START . q{sh "$f" "$@" 2>/dev/null; exit 0' sh};
+my $PERMISSION = 'flashteams-permission';
+
+# Each event's matcher groups, in order: the matcher, the name the command
+# hands the starter, and whether the command keeps stdout.
 my %HOOKS = (
     claude => {
         file   => "$CLAUDE/hooks/hooks.json",
         root   => 'CLAUDE_PLUGIN_ROOT',
-        events => [qw(SessionStart UserPromptSubmit PreToolUse PostToolUse PostToolUseFailure
-                      PermissionRequest Notification Stop StopFailure)],
-        matchers => {
-            PreToolUse   => 'AskUserQuestion',
-            Notification => 'permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog',
+        events => {
+            SessionStart       => [[undef, 'SessionStart', 1]],
+            UserPromptSubmit   => [[undef, 'UserPromptSubmit']],
+            PreToolUse         => [['AskUserQuestion', 'PreToolUse'], ['Bash', $PERMISSION, 1]],
+            PostToolUse        => [[undef, 'PostToolUse']],
+            PostToolUseFailure => [[undef, 'PostToolUseFailure']],
+            PermissionRequest  => [[undef, 'PermissionRequest']],
+            Notification => [['permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog', 'Notification']],
+            Stop               => [[undef, 'Stop']],
+            StopFailure        => [[undef, 'StopFailure']],
         },
     },
     codex => {
-        file     => "$CODEX/hooks/hooks.json",
-        root     => 'PLUGIN_ROOT',
-        events   => [qw(SessionStart UserPromptSubmit PreToolUse PostToolUse PermissionRequest Stop Interrupt)],
-        matchers => { PreToolUse => '^request_user_input$' },
+        file   => "$CODEX/hooks/hooks.json",
+        root   => 'PLUGIN_ROOT',
+        events => {
+            SessionStart      => [[undef, 'SessionStart', 1]],
+            UserPromptSubmit  => [[undef, 'UserPromptSubmit']],
+            PreToolUse        => [['^request_user_input$', 'PreToolUse']],
+            PostToolUse       => [[undef, 'PostToolUse']],
+            PermissionRequest => [[undef, 'PermissionRequest']],
+            Stop              => [[undef, 'Stop']],
+            Interrupt         => [[undef, 'Interrupt']],
+        },
     },
 );
 for my $agent (sort keys %HOOKS) {
     my $spec = $HOOKS{$agent};
     my $config = json($spec->{file});
-    is_deeply([sort keys %{ $config->{hooks} || {} }], [sort @{ $spec->{events} }], "$agent hooks the expected events");
+    is_deeply([sort keys %{ $config->{hooks} || {} }], [sort keys %{ $spec->{events} }], "$agent hooks the expected events");
     for my $event (sort keys %{ $config->{hooks} || {} }) {
         my $groups = $config->{hooks}{$event};
-        is(scalar @$groups, 1, "$agent $event has one matcher group");
-        is($groups->[0]{matcher}, $spec->{matchers}{$event}, "$agent $event matcher");
-        my @handlers = @{ $groups->[0]{hooks} };
-        is(scalar @handlers, 1, "$agent $event has one handler");
-        my $handler = $handlers[0];
-        is($handler->{type}, 'command', "$agent $event is a command hook");
-        my $guard = $event eq 'SessionStart' ? $BRIEFING_GUARD : $QUIET_GUARD;
-        is($handler->{command}, qq{$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $event},
-            $event eq 'SessionStart'
-            ? "$agent $event starts the shared hook through the guard, keeping stdout for the briefing"
-            : "$agent $event starts the shared hook through the guard, with stdout discarded");
-        ok(!exists $handler->{args}, "$agent $event runs through sh, so a missing Perl or starter stays quiet");
-        ok(!$handler->{async}, "$agent $event runs in order");
-        cmp_ok($handler->{timeout}, '<=', 5, "$agent $event has a short timeout");
+        my $expected = $spec->{events}{$event} || [];
+        is(scalar @$groups, scalar @$expected, "$agent $event has " . scalar(@$expected) . ' matcher group(s)');
+        for my $i (0 .. $#$expected) {
+            my ($matcher, $name, $keeps_stdout) = @{ $expected->[$i] };
+            my $group = $groups->[$i] || {};
+            is($group->{matcher}, $matcher, "$agent $event matcher " . ($matcher // '(none)'));
+            my @handlers = @{ $group->{hooks} || [] };
+            is(scalar @handlers, 1, "$agent $event $name has one handler");
+            my $handler = $handlers[0] || {};
+            is($handler->{type}, 'command', "$agent $event $name is a command hook");
+            my $guard = $keeps_stdout ? $STDOUT_GUARD : $QUIET_GUARD;
+            is($handler->{command}, qq{$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $name},
+                $keeps_stdout
+                ? "$agent $event $name starts the shared hook through the guard, keeping stdout for its answer"
+                : "$agent $event $name starts the shared hook through the guard, with stdout discarded");
+            ok(!exists $handler->{args}, "$agent $event $name runs through sh, so a missing Perl or starter stays quiet");
+            ok(!$handler->{async}, "$agent $event $name runs in order");
+            cmp_ok($handler->{timeout} // 99, '<=', 5, "$agent $event $name has a short timeout");
+        }
     }
     # The hook's longest run at a session start: the input, the status
     # event and the briefing, well inside the agent's timeout.
     cmp_ok($config->{hooks}{SessionStart}[0]{hooks}[0]{timeout}, '>=', 4,
         "$agent SessionStart leaves time for the briefing");
-    my @plain = grep { $_ ne 'SessionStart' } sort keys %{ $config->{hooks} || {} };
-    is(scalar(grep { $config->{hooks}{$_}[0]{hooks}[0]{command} !~ m{>/dev/null 2>&1; exit 0'} } @plain), 0,
-        "$agent: every hook but SessionStart discards stdout");
+
+    # Which commands keep stdout, read from the file itself.
+    my @handlers = map { @{ $_->{hooks} } } map { @{ $config->{hooks}{$_} } } sort keys %{ $config->{hooks} || {} };
+    my @keeping = sort map { $_->{command} =~ / (\S+)\z/ ? $1 : '?' }
+      grep { $_->{command} !~ m{>/dev/null 2>&1; exit 0'} } @handlers;
+    is_deeply(\@keeping, $agent eq 'claude' ? ['SessionStart', $PERMISSION] : ['SessionStart'],
+        $agent eq 'claude'
+        ? 'claude: only the session start and the permission check keep stdout'
+        : 'codex: only the session start keeps stdout');
+}
+
+# Claude Code's permission check: a PreToolUse hook on the Bash tool, so it
+# runs before every Bash command, and the flashteams skill's allowed-tools
+# covers only the turn that loads the skill. Codex has no such hook: its
+# approvals are about its sandbox, and Codex is left to ask as it does.
+{
+    my $claude = json("$CLAUDE/hooks/hooks.json")->{hooks};
+    my ($bash) = grep { ($_->{matcher} // '') eq 'Bash' } @{ $claude->{PreToolUse} || [] };
+    ok($bash, 'Claude Code has a PreToolUse hook on the Bash tool');
+    like($bash && $bash->{hooks}[0]{command}, qr/ claude \Q$PERMISSION\E\z/, 'it runs the permission check');
+    my @elsewhere = grep { $_ ne 'PreToolUse' && grep { $_->{command} =~ /\Q$PERMISSION\E/ } map { @{ $_->{hooks} } } @{ $claude->{$_} } }
+      sort keys %$claude;
+    is("@elsewhere", '', 'Claude Code runs the permission check for no other event');
+
+    my $codex = json("$CODEX/hooks/hooks.json")->{hooks};
+    my @codex_bash = grep { ($_->{matcher} // '') =~ /Bash/i } map { @{ $codex->{$_} } } sort keys %$codex;
+    is(scalar @codex_bash, 0, 'Codex has no hook on Bash commands');
+    my @codex_permission = grep { $_->{command} =~ /\Q$PERMISSION\E/ } map { @{ $_->{hooks} } } map { @{ $codex->{$_} } }
+      sort keys %$codex;
+    is(scalar @codex_permission, 0, 'Codex has no permission check');
 }
 
 # ---------------------------------------------------------------------------
@@ -269,10 +319,11 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
 }
 
 # The flashteams skill: Codex's copy is shared/ as it is, and Claude Code's
-# adds one frontmatter line, allowed-tools, that lets the skill run the
-# flashteams commands that only read without asking each time. Every
-# command that changes FlashTeams keeps Claude Code's permission prompt, as
-# the same tool had over MCP.
+# adds one frontmatter line, allowed-tools: Bash(flashteams:*), so the turn
+# that loads the skill runs every flashteams command without Claude Code
+# asking. Flash Console itself asks the person before the actions that
+# need it. Claude Code drops that grant at the person's next message; from
+# then on the permission check above lets a plain flashteams command run.
 {
     my $skill = 'skills/flashteams/SKILL.md';
     my $shared = slurp("shared/$skill");
@@ -284,32 +335,12 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     ok(defined $line, 'the Claude Code skill has allowed-tools in its frontmatter');
     (my $claude = $shared) =~ s/\A(---\n.*?\n)(---\n)/$1allowed-tools: @{[ $line \/\/ '' ]}\n$2/s;
     is($copy, $claude, "$CLAUDE/$skill is shared/$skill with allowed-tools added (run script/sync)");
+    is($line, 'Bash(flashteams:*)', 'the Claude Code skill runs every flashteams command without asking');
 
-    my @entries = split(/, /, $line // '');
-    my @names = map { /\ABash\(flashteams ([a-z_]+):\*\)\z/ ? $1 : "<$_>" } @entries;
-    is(scalar(grep { /\A</ } @names), 0, 'each allowed tool is Bash(flashteams <name>:*)') or diag("@names");
-    my %allowed = map { $_ => 1 } @names;
-    is(scalar(keys %allowed), scalar(@names), 'no allowed tool twice');
-    ok(!grep({ $_ eq 'Bash(flashteams:*)' || $_ eq 'Bash(flashteams *)' } @entries),
-        'the Claude Code skill does not allow every flashteams command');
-
-    # Without asking: listing the tools, reading their help, and the tools
-    # the working loop reads with.
-    ok($allowed{$_}, "the Claude Code skill runs flashteams $_ without asking")
-      for qw(tools help list_my_projects connect_workspace find_tasks load_task load_project query_codebase
-             read_docs read_source);
-
-    # Never without asking: every FlashTeams tool that changes something,
-    # starts paid work or decides for the person, and the tools that do
-    # that as well as read.
-    my @changes = qw(update_task create_task graph_action complete_phase complete_project activate_next_project
-                     create_program_project ask_flashbrain get_flashbrain_answer respond_to_approval documentation
-                     propose_recipe record_recipe_use record_openrewrite_run);
-    for my $tool (@changes) {
-        ok(!$allowed{$tool}, "flashteams $tool keeps Claude Code's permission prompt");
-        my @prefix = grep { index($tool, $_) == 0 } keys %allowed;
-        is("@prefix", '', "no allowed name starts flashteams $tool");
-    }
+    # The permission check that does the same after the skill's turn.
+    my ($bash) = grep { ($_->{matcher} // '') eq 'Bash' } @{ json("$CLAUDE/hooks/hooks.json")->{hooks}{PreToolUse} || [] };
+    like($bash && $bash->{hooks}[0]{command}, qr/ claude \Q$PERMISSION\E\z/,
+        'beside it, the permission check covers every later turn');
 }
 
 # ---------------------------------------------------------------------------
@@ -363,9 +394,11 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     like($skill, qr/list_pending_approvals/,            'exit 5: a slow FlashBrain run is looked up');
     unlike($skill, qr/Wait a moment and try once more/, 'exit 5: no blanket retry');
 
-    # The tools that close work or decide for the person are asked about.
-    like($skill, qr/Ask the person before you run `complete_project`, `complete_phase` or\s+`respond_to_approval`/,
-        'the flashteams skill asks before closing a project or phase, or answering an approval');
+    # Flash Console asks the person before the actions that need it, and
+    # the agent waits for that answer and respects a no.
+    like($skill, qr/Flash Console asks the person before closing a project or phase, editing\s+documentation, asking FlashBrain, or answering a FlashBrain approval; wait\s+for that answer, and if the person declines \(exit 1\), do not try again\s+unless they ask\./,
+        'the flashteams skill says Flash Console asks, to wait for it, and not to try again after a no');
+    unlike($skill, qr/Ask the person before you run/, 'the agent no longer asks on top of Flash Console');
 
     # The task chosen in Flash Console needs its project connected.
     like($skill, qr/finds only tasks in\s+the connected project/, 'the flashteams skill connects the chosen task\'s project');

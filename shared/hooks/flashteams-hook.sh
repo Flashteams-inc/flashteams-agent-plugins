@@ -11,9 +11,11 @@
 # hook that exits non-zero, or writes to stderr, as an error, so neither can
 # happen here.
 #
-# Only a session start ever prints anything, and only on stdout: the one
-# JSON object that hands the agent its FlashTeams briefing from Flash
-# Console. Every other hook prints nothing at all.
+# Only two hooks ever print anything, and only on stdout: a session start,
+# the one JSON object that hands the agent its FlashTeams briefing from
+# Flash Console, and Claude Code's permission check (flashteams-permission),
+# the one JSON object that lets a plain flashteams command run without
+# Claude Code's prompt. Every other hook prints nothing at all.
 
 # The shell may start with options already on, such as errexit or xtrace
 # from a SHELLOPTS that bash reads at start. They could make this stop early
@@ -23,11 +25,30 @@
 
 # Nothing else printed here reaches the agent: not Perl's output, and not
 # the shell's own, such as its note that Perl was killed. A session start
-# keeps stdout for the briefing, which is checked before it is passed on.
-if [ "${2-}" = SessionStart ]; then
-  exec 2>/dev/null
-else
-  exec >/dev/null 2>&1
+# and the permission check keep stdout for their answer, which is checked
+# before it is passed on.
+case ${2-} in
+SessionStart | flashteams-permission) exec 2>/dev/null ;;
+*) exec >/dev/null 2>&1 ;;
+esac
+
+case $0 in
+*/*) here=${0%/*} ;;
+*) here=. ;;
+esac
+
+# The permission check needs nothing but the agent's input, so it runs
+# whether or not Flash Console is running, and never uses its socket. Its
+# answer is passed on only when Perl finished well and printed exactly the
+# answer that allows the command (the same text as $ALLOW in
+# flashteams-hook.pl), so anything else leaves Claude Code to ask as usual.
+if [ "${2-}" = flashteams-permission ]; then
+  command -v perl >/dev/null || exit 0
+  answer=$(perl "$here/flashteams-hook.pl" "$@") || exit 0
+  if [ "$answer" = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}' ]; then
+    printf '%s\n' "$answer"
+  fi
+  exit 0
 fi
 
 # Flash Console's socket, found the same way flashteams-hook.pl finds it.
@@ -48,11 +69,6 @@ esac
 [ -S "$socket" ] || exit 0
 
 command -v perl >/dev/null || exit 0
-
-case $0 in
-*/*) here=${0%/*} ;;
-*) here=. ;;
-esac
 
 # Not exec, so that whatever Perl does, this exits 0. Perl reads the agent's
 # input from the stdin it inherits.

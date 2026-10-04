@@ -5,29 +5,16 @@
 #
 # The flashteams skill is the same for both agents, except that Claude
 # Code's copy adds allowed-tools, a field Codex does not read. It lets the
-# skill run, without asking each time, the flashteams commands that only
-# read: tools, help, and the tools below. Every command that changes
-# FlashTeams, such as update_task, complete_project or ask_flashbrain, goes
-# through Claude Code's usual permission prompt, as the same tool did over
-# MCP, and so does a tool missing from this list. Only Claude Code puts a
-# plugin's bin folder on its PATH, so only it gets the shim.
+# skill run every flashteams command without Claude Code asking, because
+# Flash Console itself asks the person before the actions that need it.
+# Claude Code keeps that grant only for the turn that loads the skill; the
+# Claude Code plugin's permission check, a PreToolUse hook, does the same
+# for every later turn. Only Claude Code puts a plugin's bin folder on its
+# PATH, so only it gets the shim.
 set -eu
 cd "$(dirname "$0")/.."
 
-# FlashTeams tools that only read, or only choose what this session works
-# on (connect_workspace, connect_program). get_flashbrain_answer is left out
-# because it can restart a paused FlashBrain run, and documentation because
-# the same tool also edits documents.
-allowed=""
-for tool in \
-  tools help \
-  list_my_projects connect_workspace find_tasks load_task load_project search get_events \
-  list_programs connect_program program_documents list_products \
-  code_map query_codebase read_source read_docs resolve_code_name \
-  search_recipes learn_recipe run_recipe get_findings find_experts \
-  list_pending_approvals; do
-  allowed="${allowed:+$allowed, }Bash(flashteams $tool:*)"
-done
+allowed='Bash(flashteams:*)'
 
 for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
   mkdir -p "$plugin/hooks" "$plugin/skills/flashteams"

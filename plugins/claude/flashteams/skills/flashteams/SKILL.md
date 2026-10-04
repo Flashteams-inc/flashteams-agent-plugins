@@ -1,7 +1,7 @@
 ---
 name: flashteams
 description: Use FlashTeams through the flashteams command that Flash Console provides. Load this for anything about FlashTeams projects, tasks, phases or programs, the exploration graph, FlashBrain, recipes, or questions about the organization's code graph, such as finding, starting, updating or closing a task, reading a project's plan, or asking how a piece of the code fits together.
-allowed-tools: Bash(flashteams tools:*), Bash(flashteams help:*), Bash(flashteams list_my_projects:*), Bash(flashteams connect_workspace:*), Bash(flashteams find_tasks:*), Bash(flashteams load_task:*), Bash(flashteams load_project:*), Bash(flashteams search:*), Bash(flashteams get_events:*), Bash(flashteams list_programs:*), Bash(flashteams connect_program:*), Bash(flashteams program_documents:*), Bash(flashteams list_products:*), Bash(flashteams code_map:*), Bash(flashteams query_codebase:*), Bash(flashteams read_source:*), Bash(flashteams read_docs:*), Bash(flashteams resolve_code_name:*), Bash(flashteams search_recipes:*), Bash(flashteams learn_recipe:*), Bash(flashteams run_recipe:*), Bash(flashteams get_findings:*), Bash(flashteams find_experts:*), Bash(flashteams list_pending_approvals:*)
+allowed-tools: Bash(flashteams:*)
 ---
 
 # FlashTeams through the flashteams command
@@ -78,10 +78,10 @@ Pass it only when that time is wrong, for example when the task sat
 started while nobody worked on it, and then give the real time worked,
 never an estimate.
 
-Ask the person before you run `complete_project`, `complete_phase` or
-`respond_to_approval`, unless they already told you to. The first two
-close work for the whole team, and the last decides for a FlashBrain run;
-none is easy to undo.
+Flash Console asks the person before closing a project or phase, editing
+documentation, asking FlashBrain, or answering a FlashBrain approval; wait
+for that answer, and if the person declines (exit 1), do not try again
+unless they ask.
 
 ## When a command fails
 

@@ -20,6 +20,9 @@ needs no sign-in of its own. It gives the agent:
   agent looks up projects and tasks with the tools when it needs them.
 - **The `flashteams` skill**, which teaches the agent the command and the
   FlashTeams way of working a task.
+- **No Claude Code permission prompt for the `flashteams` command.** Flash
+  Console already asks you before the actions that need it, so Claude Code
+  does not ask a second time. See [Permission prompts](#permission-prompts).
 - **Agent status for Flash Console.** Small hooks tell Flash Console when
   the agent starts, is working, needs your permission or an answer, is done
   or failed, so the agent's tab shows it.
@@ -66,6 +69,27 @@ Start a new Codex session. Then trust the hooks, as below.
 - **`flashteams-mcp`:** in Claude Code, run `/mcp`, choose `flashteams`,
   then **Authenticate**, and sign in with your FlashTeams account in the
   browser. In Codex, run `codex mcp login flashteams`.
+
+## Permission prompts
+
+Flash Console asks you before the `flashteams` actions that need it:
+closing a project or phase, editing documentation, asking FlashBrain, and
+answering a FlashBrain approval. If you say no, the command exits 1 and
+the skill tells the agent not to try again unless you ask.
+
+- **Claude Code:** does not ask before a `flashteams` command, so you are
+  never asked twice. The skill's `allowed-tools` is `Bash(flashteams:*)`,
+  but Claude Code keeps that only for the turn that loads the skill, so the
+  plugin also has a permission check: a `PreToolUse` hook on the Bash tool
+  that lets one plain `flashteams` command run without a prompt. Anything
+  more, such as `cd x && flashteams tools`, a pipe, a redirection or
+  `$(...)`, gets Claude Code's usual prompt. So does any command in plan
+  mode, and any command Claude Code wants to run outside its sandbox. Your
+  own deny and ask rules still apply: for example, an ask rule for
+  `Bash(flashteams update_task:*)` brings the prompt back for that tool.
+  The exact rules are in [The permission check](#the-permission-check).
+- **Codex:** unchanged. Codex asks before running the command outside its
+  sandbox (see below), and Flash Console asks as above.
 
 ## Sandboxes
 
@@ -150,11 +174,14 @@ choose `flashteams`, then **Clear authentication**; in Codex,
   removed.
 - A briefing request holds the agent, the working folder, the pane and why
   the session started.
-- The only thing the hooks ever print for the agent to read is the
+- The only things the hooks ever print for the agent to read are the
   briefing, once, when a session starts, or a short note that Flash
-  Console could not send it. They never write to your
-  terminal and never slow the agent down for more than a moment; a session
-  start waits at most a second and a half for the briefing.
+  Console could not send it, and in Claude Code the answer that lets a
+  plain `flashteams` command run without a prompt. They never write to
+  your terminal and never slow the agent down for more than a moment; a
+  session start waits at most a second and a half for the briefing.
+- The permission check reads only what Claude Code tells it about the
+  Bash command. It sends Flash Console nothing.
 - The `flashteams` command talks only to Flash Console, which calls
   FlashTeams with your sign-in. Your tokens stay in Flash Console; neither
   the command nor the agent ever sees them.
@@ -191,7 +218,8 @@ connection; see [The briefing](#the-briefing).
 
 Each agent starts the hook through `flashteams-hook.sh`, which runs the Perl
 program with its stderr discarded, and its stdout too for every hook but
-the session start, and then exits 0 whatever Perl did. So when Perl cannot
+the session start and Claude Code's permission check, and then exits 0
+whatever Perl did. So when Perl cannot
 compile the program, lacks a module it needs, or is killed, the agent never
 sees a hook error. The starter first turns off the shell options `errexit`,
 `nounset` and `xtrace`, which bash takes from an exported `SHELLOPTS`, so
@@ -204,7 +232,9 @@ sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$
   sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude Stop
 ```
 
-The session start's guard keeps stdout, for the briefing:
+The session start's guard keeps stdout, for the briefing, and so does the
+guard of Claude Code's permission check, with `flashteams-permission` in
+place of `SessionStart`:
 
 ```sh
 sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" 2>/dev/null; exit 0' \
@@ -328,12 +358,65 @@ JSON line with all of the above, or a Flash Console from before briefings,
 which reads the line, finds no `event`, and closes without a word. The
 starter also passes on what Perl printed only when Perl exited 0 and
 printed one line that starts `{"hookSpecificOutput":{` and ends `}}`. No
-other hook ever asks for a briefing or prints anything.
+other hook ever asks for a briefing, and no other hook prints anything but
+the permission check's answer, below.
 
 The longest a session start can take is a little under 3 seconds: up to
 1 second waiting for the agent's input, 0.2 for the status event, 1.5 for the
 briefing, and a little to finish reading the input. A hard limit of 3.3
 seconds stops it, well inside the 5 seconds each agent gives the hook.
+
+### The permission check
+
+Claude Code only. Its `hooks.json` has a second `PreToolUse` entry, with the
+matcher `Bash`, that runs `flashteams-hook.sh claude flashteams-permission`
+before every Bash command. It is not an agent event: it sends Flash Console
+nothing, never opens the socket, and works the same whether Flash Console is
+running or not. It reads Claude Code's hook input, at most 1 MB, and when
+all of these hold:
+
+- the input is one whole JSON object with `hook_event_name` `PreToolUse`,
+  `tool_name` `Bash`, and a string `tool_input.command`;
+- `permission_mode` is not `plan`;
+- `tool_input.dangerouslyDisableSandbox` is not true;
+- the command is one plain `flashteams` command, as below,
+
+it prints exactly this one line, and otherwise nothing:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}
+```
+
+The starter passes on that line only when Perl exited 0 and printed exactly
+it. With nothing printed, Claude Code's usual permission flow decides.
+
+A plain `flashteams` command, checked strictly, so that anything the check
+is unsure of gets the usual prompt:
+
+- At most 1 MiB, with no NUL character.
+- Spaces, tabs and line breaks may come before and after it; between words,
+  only spaces and tabs.
+- The first word is `flashteams`, unquoted, or exactly
+  `$HOME/Library/Application Support/Flash Console/bin/flashteams` in single
+  or double quotes, with the hook filling in `$HOME` from its own
+  environment (`"$HOME/..."` written out is refused). Nothing comes before
+  it: no `cd x &&`, no `VAR=value`, no `env`, `sudo` or `command`.
+- Every other word is pieces written one after another: unquoted letters,
+  digits and `_ . / : = @ , % + -`; a single-quoted string holding anything
+  but a single quote, line breaks included; or a double-quoted string with
+  no `$`, `` ` ``, `\` or `!` in it. So `--name='value'` is one word. A word
+  may not start with an unquoted `=`, which zsh turns into a command's path.
+- Nothing else outside quotes: no `; & | < > ( ) { } [ ] * ? ~ # ! $` or
+  `` ` ``, no `\`, no line break between words, and no letter beyond ASCII,
+  which also rules out lookalikes such as a full-width semicolon.
+- One exception, the quoted here-document the skill uses for long text: the
+  last word is `-`, then ` <<'NAME'` or ` <<"NAME"` (NAME is a letter or `_`,
+  then letters, digits or `_`), then a line break, the text, a line that is
+  exactly NAME, and at most one line break after it. The text can hold
+  anything, because a quoted NAME stops the shell from expanding it, but no
+  line of it may be exactly NAME, which would end it early and run the rest
+  as commands. `<<NAME` unquoted, `<<-`, a second here-document and anything
+  after the closing line are refused.
 
 ### The environment Flash Console sets
 
@@ -420,17 +503,15 @@ installs a plugin folder on its own. Each agent's plugins are separate from
 the other agent's so neither agent loads the other's manifest.
 
 Claude Code's copy of the `flashteams` skill adds one line to the
-frontmatter, `allowed-tools`, which lets the skill run without asking each
-time `flashteams tools`, `flashteams help` and the tools that only read,
-such as `find_tasks`, `load_task` and `query_codebase` (the list is in
-`script/sync`). Every command that changes FlashTeams, such as
-`update_task`, `complete_project`, `respond_to_approval` or
-`ask_flashbrain`, goes through Claude Code's usual permission prompt, as
-the same tool did over MCP, and so does any tool missing from the list.
-Answer the prompt with "don't ask again" for the commands you are happy to
-let run. Codex does not read that field; it asks before running the
-command outside its sandbox. The skill also tells both agents to ask you
-before `complete_project`, `complete_phase` or `respond_to_approval`.
+frontmatter, `allowed-tools: Bash(flashteams:*)`, which lets every
+`flashteams` command run without Claude Code asking during the turn that
+loads the skill. Claude Code drops that grant at your next message, so the
+permission check in `hooks/hooks.json` does the same for every later turn
+(see [Permission prompts](#permission-prompts)). Flash Console asks you
+before the actions that need it, and the skill tells both agents to wait
+for that answer and not to try again after a no. Codex does not read
+`allowed-tools`, and its plugin has no permission check; it asks before
+running the command outside its sandbox.
 
 The Codex plugins use the `.codex-plugin/plugin.json` layout on purpose.
 Codex also reads a newer layout with `plugin.json` and `mcp.json` at the
@@ -462,7 +543,8 @@ The tests run the hook exactly as each agent does, with the command from its
 They check the JSON lines, the caps, the removal of control and invisible
 characters, the `subagent` and `interrupted` flags and `subagent_id`, the
 `source` of a session start, that Codex never sends `pane`, that nothing
-reaches stdout but the briefing, the 8192-byte limit, inputs of several
+reaches stdout but the briefing and the permission check's answer, the
+8192-byte limit, inputs of several
 megabytes, and the quiet exits: no socket, a refused socket, a socket that
 never answers, a full socket queue, input that never ends, no Perl, a
 missing Perl module, a hook program that does not compile, dies, fails or is
@@ -478,10 +560,24 @@ printed, the text's cleaning and cutting (in UTF-16 units, with emoji), the
 short note after a refusal, that nothing is printed on any other failure,
 that the 1.5 second wait is honoured, that no other hook asks or prints,
 and that the starter passes on nothing but one whole briefing from a Perl
-program that finished well. `test/bin.t` runs the Claude Code shim against
-a stand-in `flashteams` command, and `test/manifests.t` checks both
-marketplaces, all four plugins and the skills, including that Claude Code's
-`allowed-tools` lets no command that changes FlashTeams run without asking.
+program that finished well.
+
+For Claude Code's permission check, a table of commands, some plain
+`flashteams` commands and many that only look like one (chaining, pipes,
+background jobs, substitution, redirections, groups, other here-documents,
+something before the command, other programs and paths, open quotes,
+lookalike characters, NUL, more than 1 MiB), is checked twice: against the
+Perl function alone, loaded as a library, and through the hook as Claude
+Code runs it. The tests also cover the input around the command (bad JSON,
+other tools and events, plan mode, outside the sandbox), that the answer is
+exactly one line, that nothing ever connects to the socket, that it works
+without Flash Console, that the starter passes on nothing but that exact
+answer, and the same quiet failures as the other hooks.
+
+`test/bin.t` runs the Claude Code shim against a stand-in `flashteams`
+command, and `test/manifests.t` checks both marketplaces, all four plugins
+and the skills, including Claude Code's `allowed-tools`, the permission
+check in Claude Code's `hooks.json`, and that Codex has none.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
 bash for the shell-option tests (they are skipped without it), and

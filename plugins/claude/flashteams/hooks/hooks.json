@@ -1,5 +1,5 @@
 {
-  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private socket on this computer.",
+  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private socket on this computer. Lets a plain flashteams command run without a Claude Code permission prompt, since Flash Console asks before the changes that need it.",
   "hooks": {
     "SessionStart": [
       {
@@ -30,6 +30,16 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PreToolUse",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude flashteams-permission",
             "timeout": 5
           }
         ]
