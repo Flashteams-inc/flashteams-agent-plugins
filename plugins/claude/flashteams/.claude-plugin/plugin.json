@@ -1,7 +1,7 @@
 {
   "name": "flashteams",
   "displayName": "FlashTeams",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "FlashTeams in Claude Code through Flash Console: every FlashTeams tool as the flashteams command, a briefing when a session starts, a skill for using them, and hooks that tell Flash Console what Claude Code is doing.",
   "author": {
     "name": "FlashTeams",

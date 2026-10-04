@@ -184,6 +184,11 @@ codex plugin add flashteams@flashteams
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
 
+**Coming from 1.2.0:** nothing changes on a Mac. The hooks gain a Windows
+path (see [Windows](#windows)). Codex 0.160 does not ask you to trust the
+hooks again on a Mac, because it leaves the Windows commands out of what it
+checks there; an older Codex may ask once.
+
 **Coming from 1.1.0:** Claude Code stops asking before each `flashteams`
 command once the update is installed and Claude Code restarted. Flash
 Console keeps asking before the actions that need it. Codex is unchanged.
