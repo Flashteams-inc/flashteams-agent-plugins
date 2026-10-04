@@ -3,12 +3,14 @@
 # tool's PATH, against a stand-in for the flashteams command that Flash
 # Console keeps in its own folder, and checks that the shim hands over every
 # argument, the input and the exit code, and that it says one plain line
-# and exits 3 when Flash Console's command is not there.
+# and exits 3 when Flash Console's command is not there. On Windows the
+# command is flashteams.exe, found from FLASH_CONSOLE_BIN or %LOCALAPPDATA%,
+# either of which may be written with backslashes.
 
 use strict;
 use warnings;
 
-use Cwd qw(abs_path);
+use Cwd qw(abs_path getcwd);
 use File::Path qw(make_path);
 use File::Temp qw(tempdir);
 use FindBin;
@@ -39,9 +41,12 @@ sub run {
     my %env = (PATH => $ENV{PATH}, HOME => "$TMP/home", %{ $opt{env} || {} });
     delete $env{$_} for grep { !defined $env{$_} } keys %env;
     local %ENV = %env;
+    my $here = getcwd();
+    chdir($opt{cwd}) or die "$opt{cwd}: $!" if defined $opt{cwd};
     my $started = time;
     my $err = gensym;
     my $pid = open3(my $in, my $out, $err, @{ $opt{command} || ['sh', $SHIM, @{ $opt{args} || [] }] });
+    chdir($here) or die "$here: $!";
     print $in $opt{input} if defined $opt{input};
     close($in);
     my $stdout = do { local $/; <$out> } // '';
@@ -143,6 +148,79 @@ ok(-x $SHIM, 'the shim is executable');
         is($run->{stderr}, $MISSING, "$name: says Flash Console is not running or is too old");
         cmp_ok($run->{seconds}, '<', 2, "$name: quick");
     }
+}
+
+# On Windows, where Claude Code's Bash tool is Git Bash, the command is
+# flashteams.exe, in FLASH_CONSOLE_BIN, else in
+# %LOCALAPPDATA%\Flash Console\bin, either written with Windows'
+# backslashes. Windows sets OS to Windows_NT for every program.
+{
+    my $local = "$TMP/win/Users/me/AppData/Local";
+    my $bin = "$local/Flash Console/bin";
+    make_path($bin);
+    write_file("$bin/flashteams.exe", $STAND_IN, 0755);
+    (my $local_windows = $local) =~ s{/}{\\}g;
+    my %windows = (OS => 'Windows_NT', FLASH_CONSOLE_BIN => undef, LOCALAPPDATA => $local_windows);
+
+    my @args = ('update_task', '--task_id', 'abc', '--closing_note', '-', '', 'two words', 'C:\\Users\\me', '*');
+    my $run = run(args => \@args, env => { %windows, STAND_IN_EXIT => 4 }, input => "caf\xc3\xa9\r\nWhat is left.");
+    is($run->{status}, 4, 'Windows: the exit code passes through');
+    is($run->{stdout}, join('', map { "[$_]\n" } @args) . "input:caf\xc3\xa9\r\nWhat is left.\nvia shim:1\n",
+        'Windows: every argument, as given, and the input pass through');
+    is($run->{stderr}, "a note on stderr\n", 'Windows: stderr passes through');
+
+    # FLASH_CONSOLE_BIN first, with backslashes or slashes, then
+    # %LOCALAPPDATA%; a FLASH_CONSOLE_BIN that is empty counts as unset.
+    my $other = "$TMP/win/other";
+    make_path($other);
+    write_file("$other/flashteams.exe", "#!/bin/sh\necho other\n", 0755);
+    (my $other_windows = $other) =~ s{/}{\\}g;
+    for my $value ($other, $other_windows) {
+        my $first = run(args => ['tools'], env => { %windows, FLASH_CONSOLE_BIN => $value });
+        is($first->{stdout}, "other\n", "Windows: FLASH_CONSOLE_BIN $value comes first");
+    }
+    my $empty = run(args => ['tools'], env => { %windows, FLASH_CONSOLE_BIN => '' });
+    like($empty->{stdout}, qr/\A\[tools\]\n/, 'Windows: an empty FLASH_CONSOLE_BIN leaves %LOCALAPPDATA%');
+
+    # A drive letter, as Windows writes %LOCALAPPDATA%. Here C: is a folder
+    # in the working folder, which only shows how the path is written.
+    my $cwd = "$TMP/win/cwd";
+    make_path("$cwd/C:/Users/me/AppData/Local/Flash Console/bin");
+    write_file("$cwd/C:/Users/me/AppData/Local/Flash Console/bin/flashteams.exe", $STAND_IN, 0755);
+    my $drive = run(args => ['tools'], cwd => $cwd, env => { %windows, LOCALAPPDATA => 'C:\\Users\\me\\AppData\\Local' });
+    is($drive->{status}, 0, 'Windows: %LOCALAPPDATA% on drive C: runs');
+    like($drive->{stdout}, qr/\A\[tools\]\n/, 'Windows: %LOCALAPPDATA% on drive C: hands over the arguments');
+
+    # Found through the PATH, as Claude Code's Bash tool finds it.
+    my $path = run(command => ['sh', '-c', 'flashteams tools'],
+        env => { %windows, PATH => "$ROOT/plugins/claude/flashteams/bin:$ENV{PATH}" });
+    is($path->{status}, 0, 'Windows: through the PATH: runs');
+    like($path->{stdout}, qr/\A\[tools\]\n/, 'Windows: through the PATH: reaches flashteams.exe');
+
+    # No command to hand over to: the one plain line, exit 3.
+    my $broken = "$TMP/win/broken";
+    make_path("$broken/mac-name", "$broken/not-executable", "$broken/a-folder/flashteams.exe");
+    write_file("$broken/mac-name/flashteams", $STAND_IN, 0755);
+    write_file("$broken/not-executable/flashteams.exe", $STAND_IN, 0644);
+    my %cases = (
+        'no FLASH_CONSOLE_BIN and no %LOCALAPPDATA%' => { LOCALAPPDATA => undef },
+        'Flash Console not installed'                => { LOCALAPPDATA => "$TMP\\nobody" },
+        'only the Mac name, without .exe'            => { FLASH_CONSOLE_BIN => "$broken/mac-name" },
+        'a command that cannot run'                  => { FLASH_CONSOLE_BIN => "$broken/not-executable" },
+        'a folder in its place'                      => { FLASH_CONSOLE_BIN => "$broken/a-folder" },
+        'the shim\'s own folder'                     => { FLASH_CONSOLE_BIN => "$ROOT/plugins/claude/flashteams/bin" },
+        'the shim started by itself'                 => { FLASHTEAMS_SHIM => 1 },
+    );
+    for my $name (sort keys %cases) {
+        my $missing = run(args => ['tools'], env => { %windows, %{ $cases{$name} } });
+        is($missing->{status}, 3, "Windows, $name: exits 3");
+        is($missing->{stdout}, '', "Windows, $name: nothing on stdout");
+        is($missing->{stderr}, $MISSING, "Windows, $name: says Flash Console is not running or is too old");
+    }
+
+    # Not Windows: %LOCALAPPDATA% means nothing, and the Mac folder is used.
+    my $mac = run(args => ['tools'], env => { %windows, OS => undef, HOME => "$TMP/empty-home" });
+    is($mac->{status}, 3, 'not Windows: %LOCALAPPDATA% is not used');
 }
 
 # Shell options from an exported SHELLOPTS change nothing. bash takes them

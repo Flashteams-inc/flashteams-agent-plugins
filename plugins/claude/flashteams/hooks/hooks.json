@@ -1,12 +1,12 @@
 {
-  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private socket on this computer. Lets a plain flashteams command run without a Claude Code permission prompt, since Flash Console asks before the changes that need it.",
+  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private connection on this computer (a socket, or a named pipe on Windows). Lets a plain flashteams command run without a Claude Code permission prompt, since Flash Console asks before the changes that need it.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude SessionStart",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude SessionStart",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude UserPromptSubmit",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PreToolUse",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PreToolUse",
             "timeout": 5
           }
         ]
@@ -39,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude flashteams-permission",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude flashteams-permission",
             "timeout": 5
           }
         ]
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PostToolUse",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PostToolUse",
             "timeout": 5
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PostToolUseFailure",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PostToolUseFailure",
             "timeout": 5
           }
         ]
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PermissionRequest",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PermissionRequest",
             "timeout": 5
           }
         ]
@@ -84,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude Notification",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude Notification",
             "timeout": 5
           }
         ]
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude Stop",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude Stop",
             "timeout": 5
           }
         ]
@@ -106,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude StopFailure",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude StopFailure",
             "timeout": 5
           }
         ]

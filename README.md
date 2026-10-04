@@ -32,9 +32,11 @@ you sign in to with your own FlashTeams account, and the
 `flashteams-next-task` skill that uses it. Use it for an agent outside
 Flash Console, or if you prefer MCP. You can install `flashteams` alone.
 
-The hooks work on macOS and Linux and need Perl, which comes with macOS.
-Without Perl, with a Perl that cannot run them, or without Flash Console
-running, they quietly do nothing.
+On macOS and Linux the hooks need Perl, which comes with macOS. On Windows
+they need no Perl: they hand each hook to Flash Console's own
+`flashteams.exe`, and Claude Code needs Git for Windows to run them (see
+[Windows](#windows)). Without Perl on a Mac, without Flash Console, or
+with anything else missing, they quietly do nothing.
 
 ## Install
 
@@ -94,8 +96,8 @@ the skill tells the agent not to try again unless you ask.
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
-your computer, and an agent's sandbox can block that. The command then
-says so and exits 3.
+your computer (a named pipe on Windows), and an agent's sandbox can block
+that. The command then says so and exits 3.
 
 - **Codex:** its default sandbox blocks the socket. Approve running
   `flashteams` outside the sandbox when Codex asks.
@@ -113,6 +115,55 @@ works as usual, but Flash Console does not see its status and Codex gets
 no briefing.
 
 Claude Code needs no extra step: the hooks run once the plugin is enabled.
+
+## Windows
+
+On Windows the hooks need no Perl. Each one hands the agent's input to
+Flash Console's own program, `flashteams.exe`, which talks to Flash Console
+through its named pipe:
+
+```text
+flashteams.exe --hook <agent> <hook-event>
+```
+
+The program is found in `%FLASH_CONSOLE_BIN%`, which Flash Console sets in
+every shell it starts, else in `%LOCALAPPDATA%\Flash Console\bin`, and only
+by a full path, so a folder named relative to where the agent works is never
+used. When it is not there, Flash Console is not installed, and the hooks
+quietly do nothing.
+
+- **Claude Code** needs Git for Windows. Claude Code runs its hook commands
+  in Git Bash when it finds it, and the starter then runs `flashteams.exe`.
+  Without Git Bash, Claude Code runs them in PowerShell, and the hooks do
+  nothing: no agent status and no briefing. Claude Code's Bash tool, Git
+  Bash too, finds the `flashteams` command through the plugin's shim; its
+  PowerShell tool finds `flashteams.exe` only in a Flash Console shell, whose
+  `PATH` includes it.
+- **Codex** needs version 0.131 or later, the first to read
+  `commandWindows`, the command it runs in place of `command` on Windows.
+  Codex runs it in PowerShell. It is one line that uses only PowerShell's
+  own commands, with no file from the plugin and no `${...}` for Codex to
+  fill in, so neither PowerShell's execution policy nor its Constrained
+  Language Mode stops it.
+- **Flash Console** needs a Windows version with the agent connection and
+  `flashteams.exe`. The first Windows preview has neither, so there the
+  hooks do nothing yet.
+
+Not yet tried on a real Windows PC (the tests run every command on a Mac,
+as Git Bash runs it, and in PowerShell 7 where it is installed):
+
+- that Windows PowerShell 5.1 ends a command at `$(exit 0)` with exit 0 and
+  prints nothing;
+- that `flashteams.exe`, started from PowerShell, gets the agent's input
+  byte for byte, and that its answer reaches the agent unchanged;
+- how Git Bash reads the command line Claude Code builds for these
+  commands, with their quotes inside quotes;
+- the folders each agent installs plugins into on Windows;
+- how long each hook takes there: Git Bash starts several programs for each
+  hook, and PowerShell takes a moment to start.
+
+Codex runs hook commands in `cmd.exe` instead when it finds no PowerShell
+at all. The Windows commands are PowerShell, so they would fail there.
 
 ## Update
 
@@ -167,8 +218,9 @@ choose `flashteams`, then **Clear authentication**; in Codex,
 ## Privacy
 
 - The hooks talk only to Flash Console on this computer, through a private
-  socket in your own user folder that only you can open. The hooks make no
-  network connections.
+  socket in your own user folder that only you can open. On Windows,
+  Flash Console's `flashteams.exe` does this for them, through a named pipe
+  that only you can open. The hooks make no network connections.
 - When Flash Console is not running, nothing is sent and nothing is kept.
 - An event holds what Flash Console needs to show status: the agent, what
   happened, the session id, the working folder and its project name, the
@@ -209,6 +261,23 @@ quits (a file left by a crash is replaced):
 The folder is mode 0700 and the socket 0600. The hook only connects to a
 socket owned by the person running it.
 
+On Windows, a named pipe that Flash Console creates when it starts and that
+goes away when it quits, crash included:
+
+1. `%FLASH_CONSOLE_AGENT_SOCKET%`, when it starts with `\\.\pipe\`;
+2. else `\\.\pipe\flash-console-agent-<SID>`, where `<SID>` is the
+   person's security identifier in its usual text form, such as
+   `S-1-5-21-1004336348-1177238915-682003330-1001`: the `TokenUser` of the
+   process's own token, written out by `ConvertSidToStringSidW`. Pipe names
+   are shared by everyone on the PC, so the name is per person.
+
+Flash Console creates the pipe with the person's SID as its owner and as the
+only one let in (`O:<SID>D:P(A;;GA;;;<SID>)`), with
+`FILE_FLAG_FIRST_PIPE_INSTANCE`, so it fails when anyone else already holds
+the name, and `PIPE_REJECT_REMOTE_CLIENTS`. A client connects with
+`SECURITY_IDENTIFICATION` and sends nothing unless the pipe's owner is its
+own SID. The lines on the pipe are the same as on the socket.
+
 ### How
 
 For a status event the hook connects, writes one line, a single JSON
@@ -227,12 +296,14 @@ whatever Perl did. So when Perl cannot
 compile the program, lacks a module it needs, or is killed, the agent never
 sees a hook error. The starter first turns off the shell options `errexit`,
 `nounset` and `xtrace`, which bash takes from an exported `SHELLOPTS`, so
-they cannot make it fail or print a trace.
+they cannot make it fail or print a trace. On Windows, which sets `OS` to
+`Windows_NT`, it runs Flash Console's `flashteams.exe` instead of Perl, in
+the same way; see [Windows: flashteams.exe --hook](#windows-flashteamsexe---hook).
 
 Every command in `hooks.json` starts the starter through a short guard:
 
 ```sh
-sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" >/dev/null 2>&1; exit 0' \
+$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" >/dev/null 2>&1; exit 0' \
   sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude Stop
 ```
 
@@ -241,15 +312,24 @@ guard of Claude Code's permission check, with `flashteams-permission` in
 place of `SessionStart`:
 
 ```sh
-sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" 2>/dev/null; exit 0' \
+$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" 2>/dev/null; exit 0' \
   sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude SessionStart
 ```
 
-Codex uses `${PLUGIN_ROOT}` in place of `${CLAUDE_PLUGIN_ROOT}`. When Codex
-updates the plugin, it deletes the old plugin folder but keeps running the
-hook commands it read earlier, which name files in that folder, and `sh` on a
-missing file prints an error and exits non-zero. The guard exits 0 without a
-word when the starter is missing or cannot be read.
+Codex uses `${PLUGIN_ROOT}` in place of `${CLAUDE_PLUGIN_ROOT}`, and its
+commands do not start with `$(exit 0); `. When Codex updates the plugin, it
+deletes the old plugin folder but keeps running the hook commands it read
+earlier, which name files in that folder, and `sh` on a missing file prints
+an error and exits non-zero. The guard exits 0 without a word when the
+starter is missing or cannot be read.
+
+`$(exit 0); ` in front of Claude Code's commands is for Windows. In `sh`,
+`bash` and `zsh` it does nothing. Claude Code on a Windows PC without Git
+Bash runs its hook commands in PowerShell, which has no `sh`, so each would
+fail with an error on every event; in PowerShell `$(exit 0)` ends the run
+there, with exit 0, so the hooks quietly do nothing instead. Claude Code
+has no field for a separate Windows command, so one command has to serve
+both.
 
 ### Fields
 
@@ -422,6 +502,53 @@ is unsure of gets the usual prompt:
   as commands. `<<NAME` unquoted, `<<-`, a second here-document and anything
   after the closing line are refused.
 
+### Windows: flashteams.exe --hook
+
+On Windows the starter, and Codex's `commandWindows`, run
+
+```text
+flashteams.exe --hook <agent> <hook-event>
+```
+
+with the agent's input on stdin. `<agent>` and `<hook-event>` are the words
+the starter is given, `flashteams-permission` included. Flash Console's
+`flashteams.exe` then does over the named pipe everything
+`flashteams-hook.pl` does over the socket: the same events and fields, the
+same cleaning, excerpts and 8192-byte limit, the same briefing request,
+cutting at 10,000 UTF-16 units and note after a refusal, the same waits
+(200 ms for a status event, 1.5 seconds for the briefing, 3.3 seconds in
+all), and for Claude Code the same permission check, which never opens the
+pipe, with the full path it accepts taken from its own location in place of
+`$HOME/Library/...`. The program:
+
+- exits 0 and writes nothing on stderr, whatever happens;
+- prints on stdout only the one briefing object, for `SessionStart`, or
+  the exact allow line above, for `flashteams-permission`, each as one line
+  ended by a line feed alone, in ASCII, with every other character written
+  as a `\uXXXX` escape, so that no code page and no PowerShell can change
+  it;
+- takes the working folder in Windows' own form, such as
+  `C:\Users\me\app`, for `cwd` and `project`.
+
+The starter in Git Bash checks the program's answer as it checks Perl's: it
+passes on only one line that starts `{"hookSpecificOutput":{` and ends
+`}}`, or exactly the allow line, and only when the program exited 0. Codex's
+`commandWindows` passes the program's output on as it is.
+
+`--hook` starts with a dash on purpose. A `flashteams.exe` from before
+hooks takes a word that starts with a dash for a mistake and exits 2 before
+it reads its input or opens the pipe, so the hook does nothing. A plain
+`hook` would go to FlashTeams as the name of a tool, and the hook would
+wait for an answer.
+
+Each Windows command in Codex's `hooks.json` is one line of PowerShell, the
+same for every hook but its last word, and the session start keeps stdout
+for the briefing where the others discard it with `| Out-Null`:
+
+```powershell
+$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\Flash Console\bin' }; $f = $d + '\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex Stop 2>$null | Out-Null } catch { } }; exit 0
+```
+
 ### The environment Flash Console sets
 
 Every shell Flash Console starts has `FLASH_CONSOLE_AGENT_PROTOCOL_VERSION=1`,
@@ -441,8 +568,9 @@ before its first `prompt_submit`.
 ## The flashteams command
 
 Flash Console provides the command and keeps it at
-`~/Library/Application Support/Flash Console/bin/flashteams`. It only talks
-to Flash Console over the socket above.
+`~/Library/Application Support/Flash Console/bin/flashteams`, and on
+Windows at `%LOCALAPPDATA%\Flash Console\bin\flashteams.exe`. It only talks
+to Flash Console over the socket or named pipe above.
 
 ```sh
 flashteams tools                      # every tool, one line each
@@ -469,7 +597,10 @@ says what kind:
 Claude Code puts a plugin's `bin` folder on its Bash tool's `PATH`, so the
 Claude Code plugin ships `bin/flashteams`, a short `sh` script that runs
 `${FLASH_CONSOLE_BIN:-$HOME/Library/Application Support/Flash Console/bin}/flashteams`
-with every argument. When that file is not there it prints
+with every argument. On Windows, where the Bash tool is Git Bash, it runs
+`flashteams.exe` from `%FLASH_CONSOLE_BIN%`, else from
+`%LOCALAPPDATA%\Flash Console\bin`, either written with backslashes. When
+that file is not there it prints
 `Flash Console is not running or is too old to provide the flashteams command.`
 and exits 3. Codex has no such folder, and finds the command on the `PATH`
 Flash Console sets.
@@ -499,7 +630,7 @@ plugins/codex/flashteams-mcp/       the optional Codex MCP plugin
 shared/                             the hook program, shim and skills, edited here
 script/check                        every check, as CI runs it
 script/sync                         copies shared/ into the plugins
-test/                               tests
+test/                               tests: hook.t, windows.t, bin.t, manifests.t
 ```
 
 Each plugin keeps its own copy of the shared files because each agent
@@ -578,15 +709,33 @@ exactly one line, that nothing ever connects to the socket, that it works
 without Flash Console, that the starter passes on nothing but that exact
 answer, and the same quiet failures as the other hooks.
 
+`test/windows.t` runs every hook command of both agents as Git Bash runs
+it on Windows, with `OS` set to `Windows_NT`, against a stand-in
+`flashteams.exe`, and checks that the stand-in is started as
+`flashteams.exe --hook <agent> <hook-event>` from `FLASH_CONSOLE_BIN` or
+`%LOCALAPPDATA%`, written with backslashes or a drive letter, and never
+from a relative folder; that it gets the agent's input byte for byte; that
+only one whole briefing or the exact allow answer reaches the agent; that a
+missing, broken, killed or older program leaves the agent nothing; that
+Perl and the socket are never touched; that `$(exit 0)` does nothing in
+`sh`, `bash`, `dash`, `zsh` and `ksh`; and the same shell options as above.
+Where `pwsh` is installed, as on GitHub's runners, it also has PowerShell
+parse every Windows command, runs Claude Code's commands as Claude Code
+runs them without Git Bash and checks they stop at `$(exit 0)`, and runs
+Codex's Windows commands with no `flashteams.exe` to find. Windows
+PowerShell 5.1 and a real Git Bash need a Windows PC; see [Windows](#windows).
+
 `test/bin.t` runs the Claude Code shim against a stand-in `flashteams`
-command, and `test/manifests.t` checks both marketplaces, all four plugins
-and the skills, including Claude Code's `allowed-tools`, the permission
-check in Claude Code's `hooks.json`, and that Codex has none.
+command, on a Mac and as on Windows, and `test/manifests.t` checks both
+marketplaces, all four plugins and the skills, including Claude Code's
+`allowed-tools`, the permission check in Claude Code's `hooks.json`, that
+Codex has none, and each agent's Windows commands.
 
 You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
 bash for the shell-option tests (they are skipped without it), and
 ShellCheck, which also checks each command in `hooks.json` and the guard it
-runs.
+runs, leaving out the `$(exit 0); ` that `test/manifests.t` checks. `pwsh`
+is optional: without it the PowerShell checks are skipped.
 
 Write comments, docs and messages in plain language, and do not use long
 dashes.

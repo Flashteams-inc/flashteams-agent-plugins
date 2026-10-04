@@ -1,5 +1,5 @@
 {
-  "description": "Tells Flash Console what Codex is doing, and brings in the FlashTeams briefing when a session starts, over a private socket on this computer.",
+  "description": "Tells Flash Console what Codex is doing, and brings in the FlashTeams briefing when a session starts, over a private connection on this computer (a socket, or a named pipe on Windows).",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex SessionStart",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex SessionStart 2>$null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -18,6 +19,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex UserPromptSubmit",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex UserPromptSubmit 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -30,6 +32,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex PreToolUse",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex PreToolUse 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -41,6 +44,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex PostToolUse",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex PostToolUse 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -52,6 +56,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex PermissionRequest",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex PermissionRequest 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -63,6 +68,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex Stop",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex Stop 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 5
           }
         ]
@@ -74,6 +80,7 @@
           {
             "type": "command",
             "command": "sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${PLUGIN_ROOT}/hooks/flashteams-hook.sh\" codex Interrupt",
+            "commandWindows": "$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\\Flash Console\\bin' }; $f = $d + '\\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) { try { & $f --hook codex Interrupt 2>$null | Out-Null } catch { } }; exit 0",
             "timeout": 3
           }
         ]

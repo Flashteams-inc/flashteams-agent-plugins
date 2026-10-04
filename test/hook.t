@@ -67,6 +67,9 @@ my $UNSAFE = qr/[\x00-\x1f\x7f-\x9f\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{
 # Claude Code's permission check on Bash commands, flashteams-permission.
 my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
 my $PERMISSION = 'flashteams-permission';
+# What Claude Code's commands start with, so that PowerShell, which runs
+# them on a Windows PC without Git Bash, stops there; in sh it does nothing.
+my $POWERSHELL_EXIT = '$(exit 0); ';
 my %COMMAND;
 for my $agent (sort keys %PLUGIN) {
     open(my $fh, '<', "$PLUGIN{$agent}/hooks/hooks.json") or die $!;
@@ -114,6 +117,16 @@ sub agent_command {
     my ($agent, $hook, $root) = @_;
     my $command = $COMMAND{$agent}{$hook} // ($COMMAND{$agent}{Stop} =~ s/ Stop\z/ $hook/r);
     return (['sh', '-c', $command], { $ROOT_VARIABLE{$agent} => $root // $PLUGIN{$agent} });
+}
+
+# A hook command as the agent's shell runs it, with SHELLOPTS passed on to
+# everything the command starts while that shell itself runs without the
+# options. The $(exit 0) in front of Claude Code's commands stays in the
+# agent's own shell, where it is.
+sub with_shell_options {
+    my ($command, $options) = @_;
+    my ($exit, $rest) = $command =~ /\A(\Q$POWERSHELL_EXIT\E)?(.*)\z/s;
+    return ($exit // '') . "exec env SHELLOPTS=$options $rest";
 }
 
 # How the stand-in for Flash Console answers a request line (one with an
@@ -1641,7 +1654,7 @@ SKIP: {
         my ($agent, $options, $root, $hook) = @_;
         my ($command, $root_env) = agent_command($agent, $hook // 'Stop', $root);
         return (
-            command  => [$command->[0], '-c', "exec env SHELLOPTS=$options $command->[2]"],
+            command  => [$command->[0], '-c', with_shell_options($command->[2], $options)],
             root_env => $root_env,
         );
     };
@@ -2286,7 +2299,7 @@ SKIP: {
     my $input = bash_input('flashteams tools');
     for my $options ('errexit:xtrace', 'errexit:nounset:xtrace') {
         my ($command, $root_env) = agent_command('claude', $PERMISSION);
-        allowed(permission_check(command => [$command->[0], '-c', "exec env SHELLOPTS=$options $command->[2]"],
+        allowed(permission_check(command => [$command->[0], '-c', with_shell_options($command->[2], $options)],
             env => { PATH => $path, %$root_env }, input => $input), "permission check with SHELLOPTS=$options");
         allowed(permission_check(command => ['sh', "$PLUGIN{claude}/hooks/flashteams-hook.sh", 'claude', $PERMISSION],
             env => { PATH => $path, SHELLOPTS => $options }, input => $input),
@@ -2295,7 +2308,7 @@ SKIP: {
             env => { PATH => $path, SHELLOPTS => $options }, input => bash_input('flashteams tools; id')),
             "permission check refusing, with SHELLOPTS=$options");
         my ($gone, $gone_env) = agent_command('claude', $PERMISSION, "$TMP/deleted-plugin");
-        not_allowed(permission_check(command => [$gone->[0], '-c', "exec env SHELLOPTS=$options $gone->[2]"],
+        not_allowed(permission_check(command => [$gone->[0], '-c', with_shell_options($gone->[2], $options)],
             env => { PATH => $path, %$gone_env }, input => $input),
             "permission check from a deleted plugin folder with SHELLOPTS=$options");
     }

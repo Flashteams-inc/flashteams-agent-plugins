@@ -202,11 +202,38 @@ for my $name (qw(flashteams flashteams-mcp)) {
 # Code's permission check on Bash commands (flashteams-permission), for
 # the answer that lets a plain flashteams command run without Claude Code's
 # prompt. Every other hook discards stdout as well as stderr.
+#
+# On Windows:
+#
+#   - Claude Code runs the same command in Git Bash, and the starter hands
+#     the hook to Flash Console's flashteams.exe. Claude Code has no field
+#     for a Windows command, so its commands start with $(exit 0); which in
+#     sh, bash and zsh does nothing, and in PowerShell, which Claude Code
+#     uses on a PC without Git Bash, ends the run there with exit 0. So
+#     there the hooks do nothing, instead of failing on every event.
+#   - Codex runs commandWindows in PowerShell instead of command. It finds
+#     flashteams.exe the same way the starter does and runs it with
+#     --hook, and it exits 0 without a word when it is not there. It names
+#     no plugin file and has no ${...} for Codex to fill in.
 
+my $POWERSHELL_EXIT = '$(exit 0); ';
 my $GUARD_START = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; };
 my $QUIET_GUARD = $GUARD_START . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
 my $STDOUT_GUARD = $GUARD_START . q{sh "$f" "$@" 2>/dev/null; exit 0' sh};
 my $PERMISSION = 'flashteams-permission';
+
+# Codex's command on Windows for one event: PowerShell that runs
+# flashteams.exe from FLASH_CONSOLE_BIN, else from
+# %LOCALAPPDATA%\Flash Console\bin, only when that is a full path to a file,
+# and exits 0 whatever happens. Only the session start keeps stdout.
+sub windows_command {
+    my ($event, $keeps_stdout) = @_;
+    my $run = "& \$f --hook codex $event 2>\$null" . ($keeps_stdout ? '' : ' | Out-Null');
+    return q{$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\Flash Console\bin' }; }
+      . q{$f = $d + '\flashteams.exe'; }
+      . q{if ($f -match '^[A-Za-z]:[\\\\/]' -and (Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) }
+      . "{ try { $run } catch { } }; exit 0";
+}
 
 # Each event's matcher groups, in order: the matcher, the name the command
 # hands the starter, and whether the command keeps stdout.
@@ -257,13 +284,28 @@ for my $agent (sort keys %HOOKS) {
             my $handler = $handlers[0] || {};
             is($handler->{type}, 'command', "$agent $event $name is a command hook");
             my $guard = $keeps_stdout ? $STDOUT_GUARD : $QUIET_GUARD;
-            is($handler->{command}, qq{$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $name},
+            my $prefix = $agent eq 'claude' ? $POWERSHELL_EXIT : '';
+            is($handler->{command}, qq{$prefix$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $name},
                 $keeps_stdout
                 ? "$agent $event $name starts the shared hook through the guard, keeping stdout for its answer"
                 : "$agent $event $name starts the shared hook through the guard, with stdout discarded");
             ok(!exists $handler->{args}, "$agent $event $name runs through sh, so a missing Perl or starter stays quiet");
+            ok(!exists $handler->{shell}, "$agent $event $name leaves the shell to the agent, so it runs on every system");
+            ok(!exists $handler->{if}, "$agent $event $name runs for every call its matcher takes");
             ok(!$handler->{async}, "$agent $event $name runs in order");
             cmp_ok($handler->{timeout} // 99, '<=', 5, "$agent $event $name has a short timeout");
+            ok(!exists $handler->{additionalContextLimit}, "$agent $event $name keeps the agent's own context limit");
+            if ($agent eq 'codex') {
+                is($handler->{commandWindows}, windows_command($name, $keeps_stdout),
+                    "codex $event $name has its Windows command, which runs flashteams.exe --hook codex $name");
+            }
+            else {
+                ok(!exists $handler->{commandWindows}, "claude $event $name has no Windows command, which Claude Code would not read");
+            }
+            for my $field (qw(command commandWindows)) {
+                next unless defined $handler->{$field};
+                unlike($handler->{$field}, qr/[^\x20-\x7e]/, "$agent $event $name: $field is printable ASCII");
+            }
         }
     }
     # The hook's longest run at a session start: the input, the status
@@ -300,6 +342,54 @@ for my $agent (sort keys %HOOKS) {
     my @codex_permission = grep { $_->{command} =~ /\Q$PERMISSION\E/ } map { @{ $_->{hooks} } } map { @{ $codex->{$_} } }
       sort keys %$codex;
     is(scalar @codex_permission, 0, 'Codex has no permission check');
+}
+
+# ---------------------------------------------------------------------------
+# Windows, read from the files themselves.
+
+{
+    # The Windows commands in full, written out once, so the function above
+    # cannot drift along with the files.
+    is(windows_command('Stop', 0),
+        q{$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\Flash Console\bin' }; }
+          . q{$f = $d + '\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and }
+          . q{(Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) }
+          . q{{ try { & $f --hook codex Stop 2>$null | Out-Null } catch { } }; exit 0},
+        'codex Stop on Windows, in full');
+    is(windows_command('SessionStart', 1),
+        q{$d = $env:FLASH_CONSOLE_BIN; if (-not $d) { $d = $env:LOCALAPPDATA + '\Flash Console\bin' }; }
+          . q{$f = $d + '\flashteams.exe'; if ($f -match '^[A-Za-z]:[\\\\/]' -and }
+          . q{(Test-Path -LiteralPath $f -PathType Leaf -ErrorAction SilentlyContinue)) }
+          . q{{ try { & $f --hook codex SessionStart 2>$null } catch { } }; exit 0},
+        'codex SessionStart on Windows, in full, keeping stdout for the briefing');
+
+    like(slurp('README.md'), qr/^\Q@{[ windows_command('Stop', 0) ]}\E$/m, 'the README shows the Windows command as it is');
+
+    my $codex = json("$CODEX/hooks/hooks.json")->{hooks};
+    my @windows = map { $_->{commandWindows} } map { @{ $_->{hooks} } } map { @{ $codex->{$_} } } sort keys %$codex;
+    is(scalar(grep { defined } @windows), scalar(@windows), 'every Codex hook has a Windows command');
+    for my $command (grep { defined } @windows) {
+        my ($event) = $command =~ /--hook codex (\S+)/;
+        $event //= '?';
+        unlike($command, qr/\$\{/, "codex $event on Windows has no \${...} for Codex to fill in with a raw path");
+        unlike($command, qr/flashteams-hook|PLUGIN_ROOT|\.ps1/, "codex $event on Windows runs no file from the plugin");
+        unlike($command, qr/"/, "codex $event on Windows has no double quotes, which Windows command lines can change on the way to PowerShell");
+        like($command, qr/; exit 0\z/, "codex $event on Windows ends with exit 0");
+        like($command, qr/\\flashteams\.exe'/, "codex $event on Windows runs flashteams.exe");
+        like($command, qr/\$env:FLASH_CONSOLE_BIN.*\$env:LOCALAPPDATA \+ '\\Flash Console\\bin'/,
+            "codex $event on Windows looks in FLASH_CONSOLE_BIN, then %LOCALAPPDATA%\\Flash Console\\bin");
+        unlike($command, qr/\[(?:IO|System|Console|Environment)\b|::/,
+            "codex $event on Windows calls no .NET type, which PowerShell's Constrained Language Mode refuses");
+    }
+
+    # Claude Code: one command for every system, which starts with the
+    # PowerShell exit. Only that one $( is in it.
+    my $claude = json("$CLAUDE/hooks/hooks.json")->{hooks};
+    for my $handler (map { @{ $_->{hooks} } } map { @{ $claude->{$_} } } sort keys %$claude) {
+        my ($name) = $handler->{command} =~ / (\S+)\z/;
+        is(index($handler->{command}, $POWERSHELL_EXIT), 0, "claude $name starts with the PowerShell exit");
+        is(() = $handler->{command} =~ /\$\(/g, 1, "claude $name has no other command substitution");
+    }
 }
 
 # ---------------------------------------------------------------------------

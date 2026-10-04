@@ -17,12 +17,17 @@ perl -c shared/hooks/flashteams-hook.pl
 perl -c test/hook.t
 perl -c test/manifests.t
 perl -c test/bin.t
+perl -c test/windows.t
 
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck shared/hooks/flashteams-hook.sh shared/bin/flashteams script/check script/sync
   # Each hook command in both hooks.json files, and the guard script it
-  # hands to sh -c, checked as an sh script of its own.
+  # hands to sh -c, checked as an sh script of its own. Claude Code's
+  # commands start with $(exit 0); which stops PowerShell on a Windows PC
+  # without Git Bash and does nothing in sh. ShellCheck would take it for a
+  # mistake, so it is checked by test/manifests.t instead, and left out
+  # here. Codex's commandWindows is PowerShell, which test/windows.t checks.
   commands=$(mktemp -d)
   trap 'rm -rf "$commands"' EXIT
   perl -MJSON::PP -e '
@@ -32,8 +37,9 @@ if command -v shellcheck >/dev/null 2>&1; then
       open(my $fh, "<", $file) or die "$file: $!";
       my $config = decode_json(do { local $/; <$fh> });
       for my $handler (map { @{ $_->{hooks} } } map { @$_ } values %{ $config->{hooks} }) {
-        my ($guard) = $handler->{command} =~ /\Ash -c \x27([^\x27]*)\x27 sh /;
-        for my $script (grep { defined && !$seen{$_}++ } $handler->{command}, $guard) {
+        (my $command = $handler->{command}) =~ s/\A\$\(exit 0\); //;
+        my ($guard) = $command =~ /\Ash -c \x27([^\x27]*)\x27 sh /;
+        for my $script (grep { defined && !$seen{$_}++ } $command, $guard) {
           open(my $out, ">", "$dir/" . ++$n . ".sh") or die "$dir: $!";
           print $out "#!/bin/sh\n$script\n";
         }

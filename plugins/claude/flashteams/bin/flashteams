@@ -4,10 +4,32 @@
 # the flashteams command that Flash Console keeps in its own folder. Flash
 # Console names that folder in FLASH_CONSOLE_BIN in every shell it starts.
 #
+# On Windows, where Claude Code's Bash tool is Git Bash, the command is
+# flashteams.exe, kept in %LOCALAPPDATA%\Flash Console\bin. Windows sets OS
+# to Windows_NT for every program.
+#
 # The flashteams command only talks to Flash Console on this computer;
 # this file holds no token and makes no connection of its own.
 
-bin="${FLASH_CONSOLE_BIN:-${HOME:-}/Library/Application Support/Flash Console/bin}/flashteams"
+if [ "${OS-}" = Windows_NT ]; then
+  # Windows writes its paths with backslashes, and Git Bash takes slashes.
+  rest="${FLASH_CONSOLE_BIN:-${LOCALAPPDATA:-}/Flash Console/bin}/flashteams.exe"
+  bin=
+  while :; do
+    case $rest in
+    *\\*)
+      bin="$bin${rest%%\\*}/"
+      rest=${rest#*\\}
+      ;;
+    *)
+      bin="$bin$rest"
+      break
+      ;;
+    esac
+  done
+else
+  bin="${FLASH_CONSOLE_BIN:-${HOME:-}/Library/Application Support/Flash Console/bin}/flashteams"
+fi
 
 # A FLASH_CONSOLE_BIN naming this folder would start this file again, and
 # again. FLASHTEAMS_SHIM marks the second time round.
