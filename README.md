@@ -150,6 +150,11 @@ do nothing.
   `flashteams.exe`. The first Windows preview has neither, so there the
   hooks do nothing yet.
 
+An agent run inside WSL is a Linux program, even in a Flash Console pane:
+its hooks look for Flash Console's socket inside Linux, where there is
+none, so it gets no agent status and no briefing. They never start
+`flashteams.exe` from there.
+
 Not yet tried on a real Windows PC (the tests run every command on a Mac,
 as Git Bash runs it, and in PowerShell 7 where it is installed):
 
@@ -750,8 +755,9 @@ from a relative folder or another computer; that it gets the agent's
 input byte for byte; that only one whole briefing or the exact allow
 answer reaches the agent; that a missing, broken, killed or older program
 leaves the agent nothing; that Perl and the socket are never touched; that
-`$(exit 0)` does nothing in `sh`, `bash`, `dash`, `zsh` and `ksh`; and the
-same shell options as above.
+an agent inside WSL, where `OS` is not set, never starts `flashteams.exe`
+though Windows' variables point at one; that `$(exit 0)` does nothing in
+`sh`, `bash`, `dash`, `zsh` and `ksh`; and the same shell options as above.
 Where `pwsh` is installed, as on GitHub's runners, it also has PowerShell
 parse every Windows command, runs Claude Code's commands as Claude Code
 runs them without Git Bash and checks they stop at `$(exit 0)`, and runs

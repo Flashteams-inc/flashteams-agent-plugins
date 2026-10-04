@@ -461,6 +461,35 @@ for my $os (undef, '', 'Windows', 'windows_nt', 'Darwin') {
 }
 
 # ---------------------------------------------------------------------------
+# WSL: an agent there is a Linux program, with no OS set, even in a Flash
+# Console pane on Windows. Its hooks take the Unix way and find no socket
+# inside Linux, so they say nothing and never start a Windows program, even
+# with Windows' variables pointing at flashteams.exe, as WSL can pass them
+# on. Claude Code's permission check still runs Perl, which needs no socket.
+
+for my $agent (sort keys %HANDLER) {
+    for my $name (grep { $HANDLER{$agent}{$_} } 'Stop', 'SessionStart', $PERMISSION) {
+        my $label = "$agent $name inside WSL";
+        my $run = agent_run($agent, $name, env => {
+            OS                         => undef,
+            WSL_DISTRO_NAME            => 'Ubuntu',
+            WSL_INTEROP                => '/run/WSL/1_interop',
+            FLASH_CONSOLE_BIN          => $BIN,
+            FLASH_CONSOLE_AGENT_SOCKET => undef,
+            XDG_RUNTIME_DIR            => "$TMP/wsl-runtime",
+            %{ prints("$BRIEFING\n") },
+        });
+        is($run->{status}, 0, "$label: exits 0");
+        is($run->{stderr}, '', "$label: nothing on stderr");
+        is($run->{stdout}, '', "$label: prints nothing");
+        ok(!$run->{ran}, "$label: never runs flashteams.exe");
+        is($run->{connections}, 0, "$label: opens no socket");
+        is($run->{perl}, $name eq $PERMISSION ? 1 : 0,
+            $name eq $PERMISSION ? "$label: runs the check in Perl" : "$label: never starts Perl");
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Claude Code's $(exit 0) does nothing in a shell like sh: every sh-like
 # shell here runs the rest of the command as before.
 
