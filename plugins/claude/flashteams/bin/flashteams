@@ -27,6 +27,14 @@ if [ "${OS-}" = Windows_NT ]; then
       ;;
     esac
   done
+  # Git Bash rewrites an argument that looks like a Unix path, such as
+  # /src/main.rs or --path=/src, into a Windows one when it starts a Windows
+  # program like flashteams.exe. Both settings turn that off, so every
+  # argument arrives as written: the first for Git for Windows, the second
+  # for MSYS2.
+  MSYS_NO_PATHCONV=1
+  MSYS2_ARG_CONV_EXCL='*'
+  export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
 else
   bin="${FLASH_CONSOLE_BIN:-${HOME:-}/Library/Application Support/Flash Console/bin}/flashteams"
 fi

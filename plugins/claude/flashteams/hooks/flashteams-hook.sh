@@ -70,9 +70,14 @@ if [ "${OS-}" = Windows_NT ]; then
       ;;
     esac
   done
-  # Only a full path, such as C:/Users/me/... or /c/Users/me/..., so a
-  # relative folder never runs a program from the agent's working folder.
+  # Only a full path on this PC, such as C:/Users/me/... or /c/Users/me/...,
+  # so a relative folder never runs a program from the agent's working
+  # folder. A path on another computer, \\server\share\... (here
+  # //server/share/...), is refused too, as Codex's Windows command refuses
+  # it: Flash Console keeps the program on this PC, and a share that stops
+  # answering would hold up every hook.
   case $program in
+  //*) exit 0 ;;
   [A-Za-z]:/* | /*) ;;
   *) exit 0 ;;
   esac

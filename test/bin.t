@@ -221,6 +221,28 @@ ok(-x $SHIM, 'the shim is executable');
     # Not Windows: %LOCALAPPDATA% means nothing, and the Mac folder is used.
     my $mac = run(args => ['tools'], env => { %windows, OS => undef, HOME => "$TMP/empty-home" });
     is($mac->{status}, 3, 'not Windows: %LOCALAPPDATA% is not used');
+
+    # Git Bash rewrites an argument that looks like a Unix path when it
+    # starts a Windows program, so /src/main.rs would reach flashteams.exe
+    # as C:/Program Files/Git/src/main.rs. On Windows the shim turns that
+    # off for Git for Windows and for MSYS2; on a Mac it sets neither.
+    my $conversion = "$TMP/win/conversion";
+    make_path($conversion);
+    write_file("$conversion/flashteams.exe", <<'EOF', 0755);
+#!/bin/sh
+printf 'MSYS_NO_PATHCONV=[%s]\n' "${MSYS_NO_PATHCONV-unset}"
+printf 'MSYS2_ARG_CONV_EXCL=[%s]\n' "${MSYS2_ARG_CONV_EXCL-unset}"
+for arg in "$@"; do printf '[%s]\n' "$arg"; done
+EOF
+    symlink("$conversion/flashteams.exe", "$conversion/flashteams") or die $!;
+    my @paths = ('read_source', '--path', '/src/main.rs', '--path=/src', '/a:/b');
+    my $off = run(args => \@paths, env => { %windows, FLASH_CONSOLE_BIN => $conversion });
+    is($off->{status}, 0, 'Windows: a Unix-looking argument: runs');
+    is($off->{stdout}, "MSYS_NO_PATHCONV=[1]\nMSYS2_ARG_CONV_EXCL=[*]\n" . join('', map { "[$_]\n" } @paths),
+        'Windows: Git Bash is told not to rewrite arguments that look like Unix paths');
+    my $kept = run(args => \@paths, env => { %windows, OS => undef, FLASH_CONSOLE_BIN => $conversion });
+    is($kept->{stdout}, "MSYS_NO_PATHCONV=[unset]\nMSYS2_ARG_CONV_EXCL=[unset]\n" . join('', map { "[$_]\n" } @paths),
+        'not Windows: the shim sets neither');
 }
 
 # Shell options from an exported SHELLOPTS change nothing. bash takes them

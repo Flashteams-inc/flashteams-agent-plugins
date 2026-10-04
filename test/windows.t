@@ -355,6 +355,26 @@ for my $agent (sort keys %HANDLER) {
             "$drive/Users/me/AppData/Local/Flash Console/bin/flashteams.exe");
     }
 
+    # A folder on another computer, \\server\share\..., which Git Bash
+    # writes //server/share/..., is refused, as Codex's Windows command
+    # refuses it. Here //tmp/... opens the same folder as /tmp/..., where a
+    # program is waiting, so only the refusal keeps it from running.
+    (my $share = $other_windows) =~ s{\A\\}{\\\\};
+    (my $share_slashes = $share) =~ tr{\\}{/};
+    my %elsewhere = (
+        'FLASH_CONSOLE_BIN on another computer'         => { FLASH_CONSOLE_BIN => $share },
+        'FLASH_CONSOLE_BIN on another computer, slashes' => { FLASH_CONSOLE_BIN => $share_slashes },
+        '%LOCALAPPDATA% on another computer'            => { LOCALAPPDATA => $share =~ s{\\Flash Console\\bin\z}{}r },
+    );
+    ok(-x "$share_slashes/flashteams.exe", 'a program is waiting behind the //tmp/... path');
+    for my $case (sort keys %elsewhere) {
+        for my $name ('Stop', 'SessionStart', $PERMISSION) {
+            my $run = agent_run('claude', $name, env => { %{ $elsewhere{$case} }, %{ prints("$ALLOW\n") } });
+            clean_run($run, "$name, $case");
+            ok(!$run->{ran}, "$name, $case: runs nothing");
+        }
+    }
+
     # Paths that are not full paths, each with a program waiting there.
     make_path("$cwd/bin", "$cwd/AppData/Local/Flash Console/bin", "$cwd/C:Users/me/Flash Console/bin");
     write_file("$cwd/bin/flashteams.exe", $STAND_IN, 0755);
