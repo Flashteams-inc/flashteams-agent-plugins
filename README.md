@@ -25,7 +25,8 @@ needs no sign-in of its own. It gives the agent:
   does not ask a second time. See [Permission prompts](#permission-prompts).
 - **Agent status for Flash Console.** Small hooks tell Flash Console when
   the agent starts, is working, needs your permission or an answer, is done
-  or failed, so the agent's tab shows it.
+  or failed, so the agent's tab shows it, and how far the agent got through
+  its to-do list, so Flash Console's plan chip can show it.
 
 **`flashteams-mcp`** is optional. It adds the FlashTeams MCP server, which
 you sign in to with your own FlashTeams account, and the
@@ -190,6 +191,12 @@ codex plugin add flashteams@flashteams
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
 
+**Coming from 1.4.0:** the hooks also tell Flash Console the agent's plan:
+Claude Code's to-do list or tasks, and Codex's plan, step by step, so Flash
+Console's plan chip shows how far the agent got ("Plan 3 of 5") and lists
+the steps. Older Flash Console versions ignore it. The commands in
+`hooks.json` are unchanged; only the hook program learned the plan.
+
 **Coming from 1.2.0:** nothing changes on a Mac. The hooks gain a Windows
 path (see [Windows](#windows)). Codex 0.160 does not ask you to trust the
 hooks again on a Mac, because it leaves the Windows commands out of what it
@@ -235,10 +242,11 @@ choose `flashteams`, then **Clear authentication**; in Codex,
 - When Flash Console is not running, nothing is sent and nothing is kept.
 - An event holds what Flash Console needs to show status: the agent, what
   happened, the session id, the working folder and its project name, the
-  tool name, the id of the subagent involved, and short excerpts of the
-  prompt, reply, question or tool input. Excerpts are at most 320
-  characters, on one line, with control characters and invisible characters
-  removed.
+  tool name, the id of the subagent involved, short excerpts of the
+  prompt, reply, question or tool input, and the agent's to-do list: each
+  step's words and whether it is done. Excerpts are at most 320 characters,
+  a step's words at most 160, each on one line, with control characters and
+  invisible characters removed.
 - A briefing request holds the agent, the working folder, the pane and why
   the session started.
 - The only things the hooks ever print for the agent to read are the
@@ -377,6 +385,8 @@ Only `event` is required. Fields with nothing to say are left out.
 | `subagent` | `true` when the hook fired for a subagent's tool or turn. |
 | `subagent_id` | The subagent's own id, when the agent's hook input names one: `agent_id`, which Claude Code and Codex send only for a hook that fires inside a subagent. Never sent for the main agent. |
 | `interrupted` | `true` when the person interrupted the turn. |
+| `plan` | The agent's whole to-do list, on `tool_complete` of a tool that writes or lists it: a list of steps, each `{"text": ..., "status": ...}` with `"id"` when the agent gives its steps ids. `status` is `pending`, `in_progress` or `completed`; any other is sent as `pending`. Empty when the agent cleared its list. At most 50 steps. |
+| `plan_step` | One step of the plan added, changed or taken out, on `tool_complete`: `{"id": ..., "text": ..., "status": ...}`, with `text` and `status` only when they changed, and `status` `deleted` for a step taken out. |
 
 Every text field has these characters removed: control characters, the
 line and paragraph separators U+2028 and U+2029, the marks that reorder text
@@ -386,8 +396,23 @@ Excerpts (`query`, `response`, `summary`, `tool_input`, `error_message`) also
 have every run of whitespace collapsed to one space, and are cut to 320
 characters, ending in `…` when cut. Ids and paths are left out when too long
 rather than cut; a `subagent_id` too long to send still leaves `subagent`
-set. If a line would pass 8192 bytes, excerpts shorten and then go, then
-`project`, then `cwd`. The ids, `source` and the flags always stay.
+set. A plan's steps (`text` in `plan` and `plan_step`) are cleaned like
+excerpts and cut to 160 characters. If a line would pass 8192 bytes,
+excerpts shorten, then a plan's steps shorten to 80 and then 40 characters
+and past the first twenty go, then excerpts go, then `project`, then `cwd`.
+The ids, `source` and the flags always stay.
+
+The plan comes from the tools each agent keeps its to-do list with, read
+from a finished tool's input and output when each is at most 64 KB; the
+event then carries the plan in place of the `tool_input` excerpt:
+
+| Tool | Agent | Sends |
+| :- | :- | :- |
+| `TodoWrite` | Claude Code | `plan`, from `tool_input.todos` (`content`, `status`) |
+| `TaskCreate` | Claude Code | `plan_step`, the new task: `tool_response.task.id`, its `subject`, `pending` |
+| `TaskUpdate` | Claude Code | `plan_step`, from `tool_input` (`taskId`, `subject`, `status`); nothing when the tool answered `success: false` |
+| `TaskList` | Claude Code | `plan`, from `tool_response.tasks` (`id`, `subject`, `status`) |
+| `update_plan` | Codex | `plan`, from `tool_input.plan` (`step`, `status`), also when the input is JSON text |
 
 ### Events
 
@@ -714,6 +739,7 @@ The tests run the hook exactly as each agent does, with the command from its
 `hooks.json`, for every event of both agents, against a throwaway socket.
 They check the JSON lines, the caps, the removal of control and invisible
 characters, the `subagent` and `interrupted` flags and `subagent_id`, the
+plan from each agent's to-do tools and its caps, the
 `source` of a session start, that Codex never sends `pane`, that nothing
 reaches stdout but the briefing and the permission check's answer, the
 8192-byte limit, inputs of several

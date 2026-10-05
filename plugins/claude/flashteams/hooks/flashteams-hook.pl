@@ -41,7 +41,9 @@
 #   - it reads at most 1 MB of input and never decodes a tool's whole input
 #     or output, only the few fields it needs, except that the permission
 #     check decodes the whole input of a command that looks like a
-#     flashteams command, to be sure of it;
+#     flashteams command, to be sure of it, and that the input and output
+#     of an agent's to-do tools, at most 64 KB each, are decoded for the
+#     agent's plan;
 #   - it needs nothing but Perl and the modules that ship with it.
 
 use 5.010;
@@ -56,7 +58,7 @@ use JSON::PP ();
 use Socket qw(SOCK_STREAM);
 use Time::HiRes ();
 
-our $VERSION = '1.4.0';
+our $VERSION = '1.5.0';
 
 use constant {
     PROTOCOL_VERSION => 1,
@@ -77,6 +79,9 @@ use constant {
     DRAIN_SECONDS    => 0.3,            # longest time spent reading unused input
     RUN_SECONDS      => 1.8,            # hard limit on the whole run, before the briefing
     MAX_COMMAND      => 1024 * 1024,    # bytes of a Bash command the permission check accepts
+    PLAN_STEPS       => 50,             # steps of an agent's plan sent
+    PLAN_TEXT_LIMIT  => 160,            # characters of one step's words
+    PLAN_INPUT_LIMIT => 65536,          # bytes of a to-do tool's input or output decoded
     PERMISSION_CHECK => 'flashteams-permission',    # the mode named on the command line
 };
 
@@ -94,6 +99,10 @@ my $STARTED = Time::HiRes::time();
 # other characters that take no space, so text can hide nothing between its
 # visible letters (U+200B to U+200D, U+2060 to U+2064, U+FEFF).
 my $UNSAFE = qr/[\p{Cc}\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{2060}-\x{2064}\x{2066}-\x{2069}\x{FEFF}]/;
+
+# The tools that write or list an agent's plan: Claude Code's, then Codex's.
+# See plan_fields.
+my %PLAN_TOOLS = map { $_ => 1 } qw(TodoWrite TaskCreate TaskUpdate TaskList update_plan);
 
 # What each JSON escape stands for.
 my %ESCAPES = (q{"} => q{"}, q{\\} => q{\\}, q{/} => q{/}, b => "\b", f => "\f", n => "\n", r => "\r", t => "\t");
@@ -334,11 +343,105 @@ sub session_event {
 
 sub tool_event {
     my ($name, $in) = @_;
-    return {
-        event      => $name,
-        tool_name  => $in->text('tool_name', ID_LIMIT),
-        tool_input => $in->raw_excerpt('tool_input'),
-    };
+    my $tool = $in->text('tool_name', ID_LIMIT);
+    my %event = (event => $name, tool_name => $tool, tool_input => $in->raw_excerpt('tool_input'));
+    # A finished to-do tool carries the agent's plan, which says more than
+    # an excerpt of its input could.
+    if ($name eq 'tool_complete' && defined $tool && $PLAN_TOOLS{$tool}) {
+        if (my $plan = plan_fields($tool, $in)) {
+            %event = (%event, %$plan);
+            delete $event{tool_input};
+        }
+    }
+    return \%event;
+}
+
+# ---------------------------------------------------------------------------
+# The agent's plan: the to-do list it keeps while it works, so Flash Console
+# can show how far it got. Claude Code writes its whole list with TodoWrite,
+# or keeps tasks with TaskCreate and TaskUpdate and lists them with
+# TaskList; Codex writes its whole plan with update_plan. A whole list goes
+# as plan, a list of steps; one task added or changed goes as plan_step, by
+# its id. Each step's words are cleaned like an excerpt and cut to 160
+# characters, and a plan holds at most 50 steps.
+
+sub plan_fields {
+    my ($tool, $in) = @_;
+    my $input = $in->decoded('tool_input');
+    if ($tool eq 'TodoWrite') {
+        return unless ref $input eq 'HASH' && ref $input->{todos} eq 'ARRAY';
+        return { plan => plan_list($input->{todos}, 'content') };
+    }
+    if ($tool eq 'update_plan') {
+        return unless ref $input eq 'HASH' && ref $input->{plan} eq 'ARRAY';
+        return { plan => plan_list($input->{plan}, 'step') };
+    }
+    my $output = $in->decoded('tool_response');
+    if ($tool eq 'TaskList') {
+        return unless ref $output eq 'HASH' && ref $output->{tasks} eq 'ARRAY';
+        return { plan => plan_list($output->{tasks}, 'subject', 'id') };
+    }
+    if ($tool eq 'TaskCreate') {
+        my $task = ref $output eq 'HASH' ? $output->{task} : undef;
+        return unless ref $task eq 'HASH';
+        my $id = plan_id($task->{id}) // return;
+        my $text = plan_text($task->{subject}) // (ref $input eq 'HASH' ? plan_text($input->{subject}) : undef) // return;
+        return { plan_step => { id => $id, text => $text, status => 'pending' } };
+    }
+    if ($tool eq 'TaskUpdate') {
+        return unless ref $input eq 'HASH';
+        # An update the tool refused changed nothing.
+        return if ref $output eq 'HASH' && exists $output->{success} && !$output->{success};
+        my $id = plan_id($input->{taskId}) // return;
+        my %step = (id => $id);
+        my $text = plan_text($input->{subject});
+        $step{text} = $text if defined $text;
+        my $status = $input->{status};
+        $step{status} = $status if is_string($status) && $status =~ /\A(?:pending|in_progress|completed|deleted)\z/;
+        return if keys %step == 1;
+        return { plan_step => \%step };
+    }
+    return;
+}
+
+# The steps of a whole list, from each item's words under $text_key, its
+# status, and its id under $id_key when there is one.
+sub plan_list {
+    my ($items, $text_key, $id_key) = @_;
+    my @steps;
+    for my $item (@$items) {
+        last if @steps >= PLAN_STEPS;
+        next unless ref $item eq 'HASH';
+        my $text = plan_text($item->{$text_key}) // next;
+        my %step = (text => $text, status => plan_status($item->{status}));
+        if (defined $id_key) {
+            my $id = plan_id($item->{$id_key});
+            $step{id} = $id if defined $id;
+        }
+        push @steps, \%step;
+    }
+    return \@steps;
+}
+
+# A step's status: one of the three both agents use, else still to do.
+sub plan_status {
+    my ($status) = @_;
+    return is_string($status) && $status =~ /\A(?:pending|in_progress|completed)\z/ ? $status : 'pending';
+}
+
+# A step's words, as an excerpt of at most PLAN_TEXT_LIMIT characters.
+sub plan_text {
+    my ($text) = @_;
+    return undef unless is_string($text);
+    my $excerpt = excerpt_of($text);
+    return defined $excerpt ? shorten($excerpt, PLAN_TEXT_LIMIT) : undef;
+}
+
+# A task's id: text or a whole number, cleaned like any id.
+sub plan_id {
+    my ($id) = @_;
+    return undef unless defined $id && !ref $id;
+    return clean("$id", ID_LIMIT);
 }
 
 # What a permission request is for, in the agent's own words when it gave
@@ -416,6 +519,14 @@ sub build_line {
             }
         };
     }
+    # Then a plan's steps get shorter, and past the first twenty go.
+    for my $limit (80, 40) {
+        push @steps, sub {
+            my @plan = (@{ $_[0]{plan} || [] }, $_[0]{plan_step} || ());
+            $_->{text} = shorten($_->{text}, $limit) for grep { defined $_->{text} } @plan;
+        };
+    }
+    push @steps, sub { splice(@{ $_[0]{plan} }, 20) if ref $_[0]{plan} && @{ $_[0]{plan} } > 20 };
     push @steps, sub { delete @{ $_[0] }{@excerpts} };
     push @steps, sub { delete $_[0]{project} };
     push @steps, sub { delete $_[0]{cwd} };
@@ -1036,6 +1147,21 @@ sub excerpt {
     return undef unless $raw =~ s/\A"//;
     $raw =~ s/"\z//;
     return main::excerpt_of(main::decode_string($raw));
+}
+
+# A member decoded whole, when it is at most PLAN_INPUT_LIMIT bytes: an
+# object, a list, or text. Text that holds a JSON object or list, as some
+# agents send a tool's input or output, is decoded too. Undef when it is
+# missing, too long or not JSON.
+sub decoded {
+    my ($self, $key) = @_;
+    my ($raw, $cut) = $self->raw($key, main::PLAN_INPUT_LIMIT()) or return undef;
+    return undef if $cut;
+    my $value = eval { JSON::PP->new->utf8->allow_nonref->decode($raw) };
+    if (defined $value && !ref $value && $value =~ /\A\s*[\[{]/) {
+        $value = eval { JSON::PP->new->allow_nonref->decode($value) };
+    }
+    return $value;
 }
 
 # Any member as an excerpt of its JSON text, as the agent wrote it.

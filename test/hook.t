@@ -52,7 +52,7 @@ my $VERSION = do {
 my %ALLOWED = map { $_ => 1 } qw(
   v agent event session_id cwd pane project source query response summary
   tool_name tool_input plugin_version error_type error_message subagent
-  subagent_id interrupted
+  subagent_id interrupted plan plan_step
 );
 
 # Characters no field may carry: control characters, line and paragraph
@@ -658,6 +658,180 @@ for my $hook (sort keys %codex_cases) {
         undef, 'codex PreToolUse for other tools: nothing sent');
     is(codex('SubagentStop', { agent_id => 'sub-1' }, name => 'codex SubagentStop'),
         undef, 'codex hooks the plugin does not use: nothing sent');
+}
+
+# ---------------------------------------------------------------------------
+# The agent's plan: what its to-do tools write or list, sent with the tool's
+# event in place of an excerpt of its input. A whole list goes as plan, one
+# task added or changed as plan_step.
+
+{
+    my $todo = claude(
+        'PostToolUse',
+        {
+            tool_name  => 'TodoWrite',
+            tool_input => {
+                todos => [
+                    { content => 'Read the sign-in code', status => 'completed', activeForm => 'Reading' },
+                    { content => "Fix the token\nrefresh\x{202E}", status => 'in_progress', activeForm => 'Fixing' },
+                    { content => 'Run the tests', status => 'pending', activeForm => 'Running the tests' },
+                    { content => 'Ship it', status => 'blocked' },
+                    { status => 'pending' },
+                    { content => 7, status => 'pending' },
+                    'not a step',
+                ],
+            },
+            tool_response => { oldTodos => [], newTodos => [] },
+        },
+        name => 'claude TodoWrite'
+    );
+    is_deeply(
+        $todo->{plan},
+        [
+            { text => 'Read the sign-in code', status => 'completed' },
+            { text => 'Fix the token refresh', status => 'in_progress' },
+            { text => 'Run the tests', status => 'pending' },
+            { text => 'Ship it', status => 'pending' },
+        ],
+        'claude TodoWrite: the whole list, cleaned, an unknown status as still to do'
+    ) or diag(explain($todo));
+    is($todo->{event}, 'tool_complete', 'claude TodoWrite: a finished tool');
+    is($todo->{tool_name}, 'TodoWrite', 'claude TodoWrite: the tool is named');
+    ok(!exists $todo->{tool_input}, 'claude TodoWrite: the plan takes the place of the input excerpt');
+
+    my $cleared = claude('PostToolUse', { tool_name => 'TodoWrite', tool_input => { todos => [] } },
+        name => 'claude TodoWrite cleared');
+    is_deeply($cleared->{plan}, [], 'claude TodoWrite: an empty list goes, so the plan is cleared');
+
+    my $created = claude(
+        'PostToolUse',
+        {
+            tool_name     => 'TaskCreate',
+            tool_input    => { subject => 'Write the docs', description => 'Every page', activeForm => 'Writing' },
+            tool_response => { task => { id => '3', subject => 'Write the docs' } },
+        },
+        name => 'claude TaskCreate'
+    );
+    is_deeply($created->{plan_step}, { id => '3', text => 'Write the docs', status => 'pending' },
+        'claude TaskCreate: one new step, by the id the tool gave');
+    ok(!exists $created->{plan} && !exists $created->{tool_input}, 'claude TaskCreate: no whole list, no excerpt');
+
+    my $updated = claude(
+        'PostToolUse',
+        {
+            tool_name     => 'TaskUpdate',
+            tool_input    => { taskId => '3', status => 'in_progress' },
+            tool_response => { success => JSON::PP::true, taskId => '3', updatedFields => ['status'] },
+        },
+        name => 'claude TaskUpdate'
+    );
+    is_deeply($updated->{plan_step}, { id => '3', status => 'in_progress' }, 'claude TaskUpdate: the step and its status');
+
+    my $renamed = claude('PostToolUse',
+        { tool_name => 'TaskUpdate', tool_input => { taskId => 4, subject => 'Docs, then tests', status => 'deleted' } },
+        name => 'claude TaskUpdate deleted');
+    is_deeply($renamed->{plan_step}, { id => '4', text => 'Docs, then tests', status => 'deleted' },
+        'claude TaskUpdate: a numeric id, new words, and a step taken out');
+
+    my $refused = claude(
+        'PostToolUse',
+        {
+            tool_name     => 'TaskUpdate',
+            tool_input    => { taskId => '9', status => 'completed' },
+            tool_response => { success => JSON::PP::false, taskId => '9', updatedFields => [], error => 'Not found' },
+        },
+        name => 'claude TaskUpdate refused'
+    );
+    ok(!exists $refused->{plan_step}, 'claude TaskUpdate: an update the tool refused sends no step');
+    is($refused->{tool_input}, '{"status":"completed","taskId":"9"}', 'claude TaskUpdate refused: the usual excerpt');
+
+    my $nothing = claude('PostToolUse', { tool_name => 'TaskUpdate', tool_input => { taskId => '3', owner => 'me' } },
+        name => 'claude TaskUpdate of nothing shown');
+    ok(!exists $nothing->{plan_step}, 'claude TaskUpdate: a change to nothing a step shows sends no step');
+
+    my $listed = claude(
+        'PostToolUse',
+        {
+            tool_name     => 'TaskList',
+            tool_input    => {},
+            tool_response => {
+                tasks => [
+                    { id => '1', subject => 'Plan the change', status => 'completed', blockedBy => [] },
+                    { id => 2,   subject => 'Build it',        status => 'in_progress', blockedBy => ['1'] },
+                ],
+            },
+        },
+        name => 'claude TaskList'
+    );
+    is_deeply(
+        $listed->{plan},
+        [
+            { id => '1', text => 'Plan the change', status => 'completed' },
+            { id => '2', text => 'Build it',        status => 'in_progress' },
+        ],
+        'claude TaskList: the whole list, with ids'
+    );
+
+    my $codex_plan = codex(
+        'PostToolUse',
+        {
+            tool_name     => 'update_plan',
+            tool_input    => {
+                explanation => 'Smallest fix first',
+                plan        => [
+                    { step => 'Find the bug', status => 'completed' },
+                    { step => 'Fix it',       status => 'in_progress' },
+                    { step => 'Add a test',   status => 'pending' },
+                ],
+            },
+            tool_response => 'Plan updated',
+        },
+        name => 'codex update_plan'
+    );
+    is_deeply(
+        $codex_plan->{plan},
+        [
+            { text => 'Find the bug', status => 'completed' },
+            { text => 'Fix it',       status => 'in_progress' },
+            { text => 'Add a test',   status => 'pending' },
+        ],
+        'codex update_plan: the whole plan'
+    );
+
+    my $as_text = codex(
+        'PostToolUse',
+        {
+            tool_name  => 'update_plan',
+            tool_input => JSON::PP->new->canonical->encode({ plan => [{ step => 'Only step', status => 'pending' }] }),
+        },
+        name => 'codex update_plan as JSON text'
+    );
+    is_deeply($as_text->{plan}, [{ text => 'Only step', status => 'pending' }],
+        'codex update_plan: input sent as JSON text is read too');
+
+    my @many = map { { content => "Step $_ " . ('x' x 300), status => 'pending' } } 1 .. 80;
+    my $long = claude('PostToolUse', { tool_name => 'TodoWrite', tool_input => { todos => \@many } },
+        name => 'claude long plan');
+    is(scalar @{ $long->{plan} }, 50, 'a long plan: at most 50 steps');
+    ok(!(grep { length($_->{text}) > 80 } @{ $long->{plan} }), 'a long plan: steps shortened to fit the line');
+    like($long->{plan}[0]{text}, qr/\AStep 1 x+\x{2026}\z/, 'a long plan: a cut step ends in an ellipsis');
+
+    my $bad = claude('PostToolUse', { tool_name => 'TodoWrite', tool_input => { todos => 'three things' } },
+        name => 'claude TodoWrite not a list');
+    ok(!exists $bad->{plan}, 'a to-do input that is not a list: no plan');
+    is($bad->{tool_input}, '{"todos":"three things"}', 'a to-do input that is not a list: the usual excerpt');
+
+    my $huge = claude('PostToolUse',
+        { tool_name => 'TodoWrite', tool_input => { todos => [{ content => 'a' x 70000, status => 'pending' }] } },
+        name => 'claude TodoWrite too big to read');
+    ok(!exists $huge->{plan}, 'a to-do input over 64 KB is not decoded: no plan');
+
+    my $asked = claude(
+        'PermissionRequest',
+        { tool_name => 'TodoWrite', tool_input => { todos => [{ content => 'a', status => 'pending' }] } },
+        name => 'claude TodoWrite permission'
+    );
+    ok(!exists $asked->{plan}, 'only a finished tool sends a plan');
 }
 
 # ---------------------------------------------------------------------------
