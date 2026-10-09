@@ -5,8 +5,9 @@
 #
 # through a short guard that first checks this file is still there (see the
 # README). On macOS and Linux this passes the agent's input on to
-# flashteams-hook.pl. On Windows, where Claude Code runs it in Git Bash, it
-# passes the input on to Flash Console's own flashteams.exe instead, as
+# flashteams-hook.pl. On Windows, where Claude Code runs it in Git Bash, and
+# inside WSL in a Flash Console pane, it passes the input on to Flash
+# Console's own flashteams.exe instead, as
 #
 #   flashteams.exe --hook <agent> <hook-event>
 #
@@ -41,14 +42,47 @@ esac
 # flashteams-hook.pl, and the same that flashteams.exe prints on Windows.
 allow='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}'
 
+# Hands the whole hook to Flash Console's own program, $1, with the hook's
+# arguments after it: the status event, the briefing and the permission
+# check. Without the program, Flash Console is not installed and there is
+# nothing to do. Its answers are checked exactly as Perl's are below.
+hand_over() {
+  program=$1
+  shift
+  [ -f "$program" ] || exit 0
+  [ -x "$program" ] || exit 0
+
+  # Not exec, so that whatever the program does, this exits 0. It reads
+  # the agent's input from the stdin it inherits. A Flash Console from
+  # before hooks refuses --hook with exit 2 before reading anything.
+  case ${2-} in
+  SessionStart)
+    answer=$("$program" --hook "$@") || exit 0
+    case $answer in
+    *'
+'*) ;;
+    '{"hookSpecificOutput":{'*'}}') printf '%s\n' "$answer" ;;
+    esac
+    ;;
+  flashteams-permission)
+    answer=$("$program" --hook "$@") || exit 0
+    if [ "$answer" = "$allow" ]; then
+      printf '%s\n' "$answer"
+    fi
+    ;;
+  *)
+    "$program" --hook "$@"
+    ;;
+  esac
+  exit 0
+}
+
 # Windows sets OS to Windows_NT for every program. There the Perl program
 # cannot reach Flash Console, whose agent connection is a named pipe, so
-# Flash Console's own flashteams.exe does the whole hook: the status event,
-# the briefing and the permission check. It is found in FLASH_CONSOLE_BIN,
-# which Flash Console sets in every shell it starts, else in the folder
-# Flash Console keeps it in, %LOCALAPPDATA%\Flash Console\bin. Without it,
-# Flash Console is not installed and there is nothing to do. Its answers are
-# checked exactly as Perl's are below.
+# Flash Console's own flashteams.exe does the whole hook. It is found in
+# FLASH_CONSOLE_BIN, which Flash Console sets in every shell it starts,
+# else in the folder Flash Console keeps it in,
+# %LOCALAPPDATA%\Flash Console\bin.
 if [ "${OS-}" = Windows_NT ]; then
   dir=${FLASH_CONSOLE_BIN:-}
   if [ -z "$dir" ]; then
@@ -81,32 +115,7 @@ if [ "${OS-}" = Windows_NT ]; then
   [A-Za-z]:/* | /*) ;;
   *) exit 0 ;;
   esac
-  [ -f "$program" ] || exit 0
-  [ -x "$program" ] || exit 0
-
-  # Not exec, so that whatever the program does, this exits 0. It reads
-  # the agent's input from the stdin it inherits. A Flash Console from
-  # before hooks refuses --hook with exit 2 before reading anything.
-  case ${2-} in
-  SessionStart)
-    answer=$("$program" --hook "$@") || exit 0
-    case $answer in
-    *'
-'*) ;;
-    '{"hookSpecificOutput":{'*'}}') printf '%s\n' "$answer" ;;
-    esac
-    ;;
-  flashteams-permission)
-    answer=$("$program" --hook "$@") || exit 0
-    if [ "$answer" = "$allow" ]; then
-      printf '%s\n' "$answer"
-    fi
-    ;;
-  *)
-    "$program" --hook "$@"
-    ;;
-  esac
-  exit 0
+  hand_over "$program" "$@"
 fi
 
 case $0 in
@@ -125,6 +134,22 @@ if [ "${2-}" = flashteams-permission ]; then
   if [ "$answer" = "$allow" ]; then
     printf '%s\n' "$answer"
   fi
+  exit 0
+fi
+
+# Inside WSL, which names its distribution in WSL_DISTRO_NAME and its way
+# to Windows in WSL_INTEROP, an agent is a Linux program, while Flash
+# Console runs on Windows and listens on a named pipe, out of Perl's reach.
+# A Flash Console pane running WSL names the folder of its flashteams.exe in
+# FLASH_CONSOLE_BIN, as Linux sees it (/mnt/c/...), and WSL starts a
+# Windows program from Linux, passing it the pane's variables back, so the
+# program does the whole hook as on Windows. It must be a full path, so a
+# relative folder never runs a program from the agent's working folder.
+# WSL started anywhere else has no FLASH_CONSOLE_BIN, and nothing to do.
+if [ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ]; then
+  case ${FLASH_CONSOLE_BIN:-} in
+  /*) hand_over "$FLASH_CONSOLE_BIN/flashteams.exe" "$@" ;;
+  esac
   exit 0
 fi
 

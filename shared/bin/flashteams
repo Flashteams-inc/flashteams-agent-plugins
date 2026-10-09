@@ -6,7 +6,9 @@
 #
 # On Windows, where Claude Code's Bash tool is Git Bash, the command is
 # flashteams.exe, kept in %LOCALAPPDATA%\Flash Console\bin. Windows sets OS
-# to Windows_NT for every program.
+# to Windows_NT for every program. Inside WSL in a Flash Console pane, it is
+# the same flashteams.exe, in the folder FLASH_CONSOLE_BIN names as Linux
+# sees it, which WSL runs on Windows.
 #
 # The flashteams command only talks to Flash Console on this computer;
 # this file holds no token and makes no connection of its own.
@@ -35,13 +37,20 @@ if [ "${OS-}" = Windows_NT ]; then
   MSYS_NO_PATHCONV=1
   MSYS2_ARG_CONV_EXCL='*'
   export MSYS_NO_PATHCONV MSYS2_ARG_CONV_EXCL
+elif [ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ]; then
+  # Only a full path, so a relative folder never runs a program from the
+  # agent's working folder. WSL started anywhere else has none.
+  case ${FLASH_CONSOLE_BIN:-} in
+  /*) bin="$FLASH_CONSOLE_BIN/flashteams.exe" ;;
+  *) bin= ;;
+  esac
 else
   bin="${FLASH_CONSOLE_BIN:-${HOME:-}/Library/Application Support/Flash Console/bin}/flashteams"
 fi
 
 # A FLASH_CONSOLE_BIN naming this folder would start this file again, and
 # again. FLASHTEAMS_SHIM marks the second time round.
-if [ -n "${FLASHTEAMS_SHIM:-}" ] || [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
+if [ -n "${FLASHTEAMS_SHIM:-}" ] || [ -z "$bin" ] || [ ! -f "$bin" ] || [ ! -x "$bin" ]; then
   echo "Flash Console is not running or is too old to provide the flashteams command." >&2
   exit 3
 fi

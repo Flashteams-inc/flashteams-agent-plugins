@@ -151,10 +151,16 @@ do nothing.
   `flashteams.exe`. The first Windows preview has neither, so there the
   hooks do nothing yet.
 
-An agent run inside WSL is a Linux program, even in a Flash Console pane:
-its hooks look for Flash Console's socket inside Linux, where there is
-none, so it gets no agent status and no briefing. They never start
-`flashteams.exe` from there.
+An agent run inside WSL is a Linux program, with the plugin installed in
+WSL itself (the commands above, run there). From 1.6.0, in a Flash Console
+pane running WSL, which names the folder of `flashteams.exe` in
+`FLASH_CONSOLE_BIN` as Linux sees it (`/mnt/c/...`, through `WSLENV`), its
+hooks hand every event and the briefing request to that `flashteams.exe`,
+which WSL runs on Windows with the pane's variables, so the agent gets its
+status and its briefing as on Windows. Claude Code's permission check still
+runs in Perl, which needs no connection, and the `flashteams` command runs
+`flashteams.exe` the same way. A relative `FLASH_CONSOLE_BIN` is never
+used, and WSL started anywhere else has none, so its hooks do nothing.
 
 Not yet tried on a real Windows PC (the tests run every command on a Mac,
 as Git Bash runs it, and in PowerShell 7 where it is installed):
@@ -781,8 +787,10 @@ from a relative folder or another computer; that it gets the agent's
 input byte for byte; that only one whole briefing or the exact allow
 answer reaches the agent; that a missing, broken, killed or older program
 leaves the agent nothing; that Perl and the socket are never touched; that
-an agent inside WSL, where `OS` is not set, never starts `flashteams.exe`
-though Windows' variables point at one; that `$(exit 0)` does nothing in
+an agent inside WSL, where `OS` is not set, hands its hooks to the
+`flashteams.exe` that `FLASH_CONSOLE_BIN` names, by a full path only, and
+starts nothing without one, its permission check still answered by Perl;
+that `$(exit 0)` does nothing in
 `sh`, `bash`, `dash`, `zsh` and `ksh`; and the same shell options as above.
 Where `pwsh` is installed, as on GitHub's runners, it also has PowerShell
 parse every Windows command, runs Claude Code's commands as Claude Code

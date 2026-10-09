@@ -17,7 +17,8 @@
 # %LOCALAPPDATA%, written with Windows' backslashes, and only by a full
 # path; it gets the agent's input untouched; only one whole briefing or the
 # exact allow answer comes back; and the run exits 0 without a word
-# whatever happens, without starting Perl or opening the socket. Claude
+# whatever happens, without starting Perl or opening the socket. Inside WSL
+# in a Flash Console pane the hooks hand over the same way. Claude
 # Code's $(exit 0) is checked in every sh-like shell here. When pwsh is
 # installed, PowerShell parses every Windows command, Claude Code's
 # commands are run as Claude Code runs them without Git Bash, and Codex's
@@ -461,31 +462,46 @@ for my $os (undef, '', 'Windows', 'windows_nt', 'Darwin') {
 }
 
 # ---------------------------------------------------------------------------
-# WSL: an agent there is a Linux program, with no OS set, even in a Flash
-# Console pane on Windows. Its hooks take the Unix way and find no socket
-# inside Linux, so they say nothing and never start a Windows program, even
-# with Windows' variables pointing at flashteams.exe, as WSL can pass them
-# on. Claude Code's permission check still runs Perl, which needs no socket.
+# WSL: an agent there is a Linux program, with no OS set, while Flash
+# Console runs on Windows. A Flash Console pane running WSL brings in
+# FLASH_CONSOLE_BIN as Linux sees it, and every hook but Claude Code's
+# permission check, which Perl answers without the socket, goes to
+# flashteams.exe there, which WSL runs on Windows. Without the variable, or
+# with a relative one, as in WSL started anywhere else, the hooks say
+# nothing and start nothing.
 
+my %WSL = (
+    OS                         => undef,
+    WSL_DISTRO_NAME            => 'Ubuntu',
+    WSL_INTEROP                => '/run/WSL/1_interop',
+    FLASH_CONSOLE_AGENT_SOCKET => undef,
+    XDG_RUNTIME_DIR            => "$TMP/wsl-runtime",
+);
 for my $agent (sort keys %HANDLER) {
     for my $name (grep { $HANDLER{$agent}{$_} } 'Stop', 'SessionStart', $PERMISSION) {
         my $label = "$agent $name inside WSL";
-        my $run = agent_run($agent, $name, env => {
-            OS                         => undef,
-            WSL_DISTRO_NAME            => 'Ubuntu',
-            WSL_INTEROP                => '/run/WSL/1_interop',
-            FLASH_CONSOLE_BIN          => $BIN,
-            FLASH_CONSOLE_AGENT_SOCKET => undef,
-            XDG_RUNTIME_DIR            => "$TMP/wsl-runtime",
-            %{ prints("$BRIEFING\n") },
-        });
+        my $run = agent_run($agent, $name, env => { %WSL, FLASH_CONSOLE_BIN => $BIN, %{ prints("$BRIEFING\n") } });
         is($run->{status}, 0, "$label: exits 0");
         is($run->{stderr}, '', "$label: nothing on stderr");
-        is($run->{stdout}, '', "$label: prints nothing");
-        ok(!$run->{ran}, "$label: never runs flashteams.exe");
         is($run->{connections}, 0, "$label: opens no socket");
-        is($run->{perl}, $name eq $PERMISSION ? 1 : 0,
-            $name eq $PERMISSION ? "$label: runs the check in Perl" : "$label: never starts Perl");
+        if ($name eq $PERMISSION) {
+            ok(!$run->{ran}, "$label: never runs flashteams.exe");
+            is($run->{perl}, 1, "$label: runs the check in Perl");
+        } else {
+            handed_over($run, $label, $agent, $name);
+            is($run->{perl}, 0, "$label: never starts Perl");
+            is($run->{stdout}, $name eq 'SessionStart' ? "$BRIEFING\n" : '',
+                $name eq 'SessionStart' ? "$label: passes on the briefing" : "$label: prints nothing");
+        }
+        for my $bin (undef, '', 'relative/bin') {
+            my $where = defined $bin ? "FLASH_CONSOLE_BIN '$bin'" : 'no FLASH_CONSOLE_BIN';
+            my $none = agent_run($agent, $name, env => { %WSL, FLASH_CONSOLE_BIN => $bin, %{ prints("$BRIEFING\n") } });
+            is($none->{status}, 0, "$label, $where: exits 0");
+            is($none->{stderr}, '', "$label, $where: nothing on stderr");
+            is($none->{stdout}, '', "$label, $where: prints nothing");
+            ok(!$none->{ran}, "$label, $where: never runs flashteams.exe");
+            is($none->{connections}, 0, "$label, $where: opens no socket");
+        }
     }
 }
 

@@ -245,6 +245,35 @@ EOF
         'not Windows: the shim sets neither');
 }
 
+# Inside WSL, in a Flash Console pane, the command is flashteams.exe in the
+# folder FLASH_CONSOLE_BIN names as Linux sees it, which WSL runs on
+# Windows. A relative folder, or none, is never used, and neither is the Mac
+# folder.
+{
+    my $bin = "$TMP/wsl/mnt/c/Users/me/AppData/Local/Flash Console/bin";
+    make_path($bin);
+    write_file("$bin/flashteams.exe", $STAND_IN, 0755);
+    write_file("$bin/flashteams", "#!/bin/sh\necho the Mac name\n", 0755);
+    my %wsl = (OS => undef, WSL_DISTRO_NAME => 'Ubuntu', WSL_INTEROP => '/run/WSL/1_interop');
+
+    my @args = ('update_task', '--task_id', 'abc', '--path', '/home/me/app', 'two words');
+    my $run = run(args => \@args, env => { %wsl, FLASH_CONSOLE_BIN => $bin, STAND_IN_EXIT => 4 }, input => 'done');
+    is($run->{status}, 4, 'WSL: the exit code passes through');
+    is($run->{stdout}, join('', map { "[$_]\n" } @args) . "input:done\nvia shim:1\n",
+        'WSL: flashteams.exe gets every argument, as given, and the input');
+
+    my $home = "$TMP/wsl/home";
+    make_path("$home/Library/Application Support/Flash Console/bin");
+    write_file("$home/Library/Application Support/Flash Console/bin/flashteams", $STAND_IN, 0755);
+    for my $value (undef, '', 'relative/bin') {
+        my $label = defined $value ? "FLASH_CONSOLE_BIN '$value'" : 'no FLASH_CONSOLE_BIN';
+        my $missing = run(args => ['tools'], env => { %wsl, FLASH_CONSOLE_BIN => $value, HOME => $home });
+        is($missing->{status}, 3, "WSL, $label: exits 3");
+        is($missing->{stdout}, '', "WSL, $label: runs nothing");
+        is($missing->{stderr}, $MISSING, "WSL, $label: says Flash Console is not running or is too old");
+    }
+}
+
 # Shell options from an exported SHELLOPTS change nothing. bash takes them
 # also when it runs as sh.
 SKIP: {
