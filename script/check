@@ -18,6 +18,7 @@ perl -c test/hook.t
 perl -c test/manifests.t
 perl -c test/bin.t
 perl -c test/windows.t
+perl -c test/ask.t
 
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then

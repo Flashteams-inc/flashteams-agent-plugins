@@ -17,11 +17,14 @@
 # killed. An agent shows a hook that exits non-zero, or writes to stderr, as
 # an error, so neither can happen here.
 #
-# Only two hooks ever print anything, and only on stdout: a session start,
-# the one JSON object that hands the agent its FlashTeams briefing from
-# Flash Console, and Claude Code's permission check (flashteams-permission),
+# Only these hooks ever print anything, and only on stdout: a session
+# start, the one JSON object that hands the agent its FlashTeams briefing
+# from Flash Console; Claude Code's permission check (flashteams-permission),
 # the one JSON object that lets a plain flashteams command run without
-# Claude Code's prompt. Every other hook prints nothing at all.
+# Claude Code's prompt; and Claude Code's two asks (ask-permission and
+# ask-elicitation), the one JSON object that carries the person's answer to
+# a question Flash Console showed as a card on the agent's pane. Every other
+# hook prints nothing at all.
 
 # The shell may start with options already on, such as errexit or xtrace
 # from a SHELLOPTS that bash reads at start. They could make this stop early
@@ -30,11 +33,11 @@
 { set +eux; } 2>/dev/null
 
 # Nothing else printed here reaches the agent: not Perl's output, and not
-# the shell's own, such as its note that Perl was killed. A session start
-# and the permission check keep stdout for their answer, which is checked
-# before it is passed on.
+# the shell's own, such as its note that Perl was killed. A session start,
+# the permission check and the asks keep stdout for their answer, which is
+# checked before it is passed on.
 case ${2-} in
-SessionStart | flashteams-permission) exec 2>/dev/null ;;
+SessionStart | flashteams-permission | ask-permission | ask-elicitation) exec 2>/dev/null ;;
 *) exec >/dev/null 2>&1 ;;
 esac
 
@@ -42,10 +45,29 @@ esac
 # flashteams-hook.pl, and the same that flashteams.exe prints on Windows.
 allow='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}'
 
+# The asks' answers, the same text Flash Console's program prints: for a
+# tool Claude Code wants to use, allow or deny, and for an MCP server asking
+# to go ahead with nothing to fill in, accept or decline. Anything else,
+# such as nothing at all when the person answers in the terminal, leaves
+# Claude Code to ask as usual.
+ask_allow='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
+ask_deny='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"The person denied this in Flash Console."}}}'
+ask_accept='{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept","content":{}}}'
+ask_decline='{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"decline"}}'
+
+# An ask shows a card on the agent's Flash Console pane, so outside a pane,
+# which Flash Console names in FLASH_CONSOLE_PANE, there is nothing to do.
+case ${2-} in
+ask-permission | ask-elicitation)
+  [ -n "${FLASH_CONSOLE_PANE:-}" ] || exit 0
+  ;;
+esac
+
 # Hands the whole hook to Flash Console's own program, $1, with the hook's
-# arguments after it: the status event, the briefing and the permission
-# check. Without the program, Flash Console is not installed and there is
-# nothing to do. Its answers are checked exactly as Perl's are below.
+# arguments after it: the status event, the briefing, the permission check
+# and the asks. Without the program, Flash Console is not installed and
+# there is nothing to do. Its answers are checked exactly as Perl's are
+# below, and an ask's against the answers for its mode.
 hand_over() {
   program=$1
   shift
@@ -67,6 +89,18 @@ hand_over() {
   flashteams-permission)
     answer=$("$program" --hook "$@") || exit 0
     if [ "$answer" = "$allow" ]; then
+      printf '%s\n' "$answer"
+    fi
+    ;;
+  ask-permission)
+    answer=$("$program" --hook "$@") || exit 0
+    if [ "$answer" = "$ask_allow" ] || [ "$answer" = "$ask_deny" ]; then
+      printf '%s\n' "$answer"
+    fi
+    ;;
+  ask-elicitation)
+    answer=$("$program" --hook "$@") || exit 0
+    if [ "$answer" = "$ask_accept" ] || [ "$answer" = "$ask_decline" ]; then
       printf '%s\n' "$answer"
     fi
     ;;
@@ -152,6 +186,20 @@ if [ -n "${WSL_DISTRO_NAME:-}${WSL_INTEROP:-}" ]; then
   esac
   exit 0
 fi
+
+# An ask waits for the person's answer on a card, which only Flash
+# Console's own program asks for, not Perl. Flash Console names the folder
+# it keeps the program in, as flashteams, in FLASH_CONSOLE_BIN in every pane.
+# It must be a full path, so a relative folder never runs a program from the
+# agent's working folder.
+case ${2-} in
+ask-permission | ask-elicitation)
+  case ${FLASH_CONSOLE_BIN:-} in
+  /*) hand_over "$FLASH_CONSOLE_BIN/flashteams" "$@" ;;
+  esac
+  exit 0
+  ;;
+esac
 
 # Flash Console's socket, found the same way flashteams-hook.pl finds it.
 # When it is not there, Flash Console is not running and there is nothing to

@@ -1,5 +1,5 @@
 {
-  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private connection on this computer (a socket, or a named pipe on Windows). Lets a plain flashteams command run without a Claude Code permission prompt, since Flash Console asks before the changes that need it.",
+  "description": "Tells Flash Console what Claude Code is doing, and brings in the FlashTeams briefing when a session starts, over a private connection on this computer (a socket, or a named pipe on Windows). Lets a plain flashteams command run without a Claude Code permission prompt, since Flash Console asks before the changes that need it. In a Flash Console pane, puts Claude Code's permission prompts, and an MCP server asking to go ahead, on a card with buttons as well as in the terminal.",
   "hooks": {
     "SessionStart": [
       {
@@ -74,6 +74,26 @@
             "type": "command",
             "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude PermissionRequest",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude ask-permission",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "Elicitation": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" 2>/dev/null; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude ask-elicitation",
+            "timeout": 600
           }
         ]
       }

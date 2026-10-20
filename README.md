@@ -94,6 +94,13 @@ the skill tells the agent not to try again unless you ask.
 - **Codex:** unchanged. Codex asks before running the command outside its
   sandbox (see below), and Flash Console asks as above.
 
+In a Flash Console pane, Claude Code's own questions also show as a card
+with buttons on the pane, so you can answer with a click as well as with
+the keyboard: a tool it wants to use (Allow, Deny), and an MCP server
+asking to go ahead with nothing to fill in, such as the Supabase server
+before destructive SQL (Accept, Decline). Answer in the terminal leaves the
+question to Claude Code's own prompt. See [The asks](#the-asks).
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
@@ -327,7 +334,8 @@ connection; see [The briefing](#the-briefing).
 Each agent starts the hook through `flashteams-hook.sh`, which runs the Perl
 program with its stderr discarded, and its stdout too for every hook but
 the session start and Claude Code's permission check, and then exits 0
-whatever Perl did. So when Perl cannot
+whatever Perl did. Claude Code's asks run Flash Console's own program
+instead of Perl; see [The asks](#the-asks). So when Perl cannot
 compile the program, lacks a module it needs, or is killed, the agent never
 sees a hook error. The starter first turns off the shell options `errexit`,
 `nounset` and `xtrace`, which bash takes from an exported `SHELLOPTS`, so
@@ -342,9 +350,10 @@ $(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0;
   sh "${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh" claude Stop
 ```
 
-The session start's guard keeps stdout, for the briefing, and so does the
-guard of Claude Code's permission check, with `flashteams-permission` in
-place of `SessionStart`:
+The session start's guard keeps stdout, for the briefing, and so do the
+guards of Claude Code's permission check and its asks, with
+`flashteams-permission`, `ask-permission` or `ask-elicitation` in place of
+`SessionStart`:
 
 ```sh
 $(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] || exit 0; sh "$f" "$@" 2>/dev/null; exit 0' \
@@ -553,6 +562,56 @@ is unsure of gets the usual prompt:
   line of it may be exactly NAME, which would end it early and run the rest
   as commands. `<<NAME` unquoted, `<<-`, a second here-document and anything
   after the closing line are refused.
+
+### The asks
+
+Claude Code only, from version 1.7.0, and only in a Flash Console pane. Two
+entries in its `hooks.json` wait for the person instead of reporting:
+
+| Mode | Hook | What it asks |
+| :- | :- | :- |
+| `ask-permission` | a second `PermissionRequest` entry | A tool Claude Code wants to use. Claude Code's own `AskUserQuestion` is left to its prompt. |
+| `ask-elicitation` | `Elicitation` | An MCP server asking to go ahead, a form with no fields to fill in. A form with fields, and a request to open a web page, are left to Claude Code's prompt. |
+
+Each has a timeout of 600 seconds, where every other hook has 5. The
+starter hands an ask to Flash Console's own program, never to Perl:
+`$FLASH_CONSOLE_BIN/flashteams --hook claude <mode>` on a Mac or Linux, by a
+full path only, and `flashteams.exe` on Windows and inside WSL as for every
+other hook. Without `FLASH_CONSOLE_PANE`, outside a Flash Console pane, the
+starter does nothing at once.
+
+The program writes one request line to Flash Console and keeps the
+connection open for the answer:
+
+```json
+{"agent":"claude","args":{"detail":"rm -rf build","kind":"permission","subject":"Bash"},"cwd":"/Users/me/app","id":"9f86d081884c7d659a2feaa0c55ad015","op":"ask","pane":"pane-42","session":"s-1","v":1}
+```
+
+`args.kind` is `permission`, with the tool's name as `subject` and its
+command, query, file or address as `detail`, or `confirm`, with the MCP
+server's name as `subject` and its message as `detail`. Flash Console shows
+the card and answers with `{"v":1,"id":...,"ok":true,"data":{"answer":...}}`,
+where the answer is `allow`, `deny` or `terminal`. It answers `terminal`
+when the person chooses Answer in the terminal, when Claude Code goes on
+because the person answered in its own prompt, and after 590 seconds.
+
+The program then prints one of these four lines, and nothing for
+`terminal`, a refusal, or a Flash Console from before asks:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"The person denied this in Flash Console."}}}
+{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept","content":{}}}
+{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"decline"}}
+```
+
+The starter passes on only one of the two lines for its mode, exactly, and
+only when the program exited 0. With nothing printed, Claude Code's prompt
+decides. Claude Code shows its permission prompt while the permission ask
+runs and takes whichever answer comes first, so the card never holds up an
+answer typed in the terminal. It runs the elicitation hook before it shows
+its own prompt, so that prompt appears once the card is answered in the
+terminal, or after the wait.
 
 ### Windows: flashteams.exe --hook
 
@@ -765,6 +824,14 @@ short note after a refusal, that nothing is printed on any other failure,
 that the 1.5 second wait is honoured, that no other hook asks or prints,
 and that the starter passes on nothing but one whole briefing from a Perl
 program that finished well.
+
+`test/ask.t` runs Claude Code's two asks from its `hooks.json` on a Mac, on
+Windows and inside WSL, against a stand-in for Flash Console's program, and
+checks that the program is started from `FLASH_CONSOLE_BIN` or
+`%LOCALAPPDATA%` only in a Flash Console pane and only by a full path, with
+the agent's input byte for byte; that each of the exact answers for the
+mode reaches the agent, however long the person takes, and nothing else
+does; and that Perl and the socket are never touched.
 
 For Claude Code's permission check, a table of commands, some plain
 `flashteams` commands and many that only look like one (chaining, pipes,

@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.6.0';
+my $RELEASE = '1.7.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -197,11 +197,14 @@ for my $name (qw(flashteams flashteams-mcp)) {
 # event it is registered for, through a guard that exits 0 without a word
 # when the starter is missing or unreadable. Codex keeps running the hook
 # commands it read from a plugin folder after an update has deleted that
-# folder, and sh on a missing file complains and exits non-zero. Only two
-# commands keep stdout: the session start, for the briefing, and Claude
-# Code's permission check on Bash commands (flashteams-permission), for
-# the answer that lets a plain flashteams command run without Claude Code's
-# prompt. Every other hook discards stdout as well as stderr.
+# folder, and sh on a missing file complains and exits non-zero. Only these
+# commands keep stdout: the session start, for the briefing; Claude Code's
+# permission check on Bash commands (flashteams-permission), for the answer
+# that lets a plain flashteams command run without Claude Code's prompt;
+# and Claude Code's two asks (ask-permission and ask-elicitation), for the
+# person's answer on Flash Console's card. Every other hook discards stdout
+# as well as stderr. Every hook has a short timeout but the asks, which
+# wait for the person as long as the card does.
 #
 # On Windows:
 #
@@ -221,6 +224,7 @@ my $GUARD_START = q{sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r "$f" ] |
 my $QUIET_GUARD = $GUARD_START . q{sh "$f" "$@" >/dev/null 2>&1; exit 0' sh};
 my $STDOUT_GUARD = $GUARD_START . q{sh "$f" "$@" 2>/dev/null; exit 0' sh};
 my $PERMISSION = 'flashteams-permission';
+my %ASK = ('ask-permission' => 1, 'ask-elicitation' => 1);
 
 # Codex's command on Windows for one event: PowerShell that runs
 # flashteams.exe from FLASH_CONSOLE_BIN, else from
@@ -247,7 +251,8 @@ my %HOOKS = (
             PreToolUse         => [['AskUserQuestion', 'PreToolUse'], ['Bash', $PERMISSION, 1]],
             PostToolUse        => [[undef, 'PostToolUse']],
             PostToolUseFailure => [[undef, 'PostToolUseFailure']],
-            PermissionRequest  => [[undef, 'PermissionRequest']],
+            PermissionRequest  => [[undef, 'PermissionRequest'], [undef, 'ask-permission', 1]],
+            Elicitation        => [[undef, 'ask-elicitation', 1]],
             Notification => [['permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog', 'Notification']],
             Stop               => [[undef, 'Stop']],
             StopFailure        => [[undef, 'StopFailure']],
@@ -293,7 +298,12 @@ for my $agent (sort keys %HOOKS) {
             ok(!exists $handler->{shell}, "$agent $event $name leaves the shell to the agent, so it runs on every system");
             ok(!exists $handler->{if}, "$agent $event $name runs for every call its matcher takes");
             ok(!$handler->{async}, "$agent $event $name runs in order");
-            cmp_ok($handler->{timeout} // 99, '<=', 5, "$agent $event $name has a short timeout");
+            if ($ASK{$name}) {
+                is($handler->{timeout}, 600, "$agent $event $name waits ten minutes for the person");
+            }
+            else {
+                cmp_ok($handler->{timeout} // 99, '<=', 5, "$agent $event $name has a short timeout");
+            }
             ok(!exists $handler->{additionalContextLimit}, "$agent $event $name keeps the agent's own context limit");
             if ($agent eq 'codex') {
                 is($handler->{commandWindows}, windows_command($name, $keeps_stdout),
@@ -317,9 +327,9 @@ for my $agent (sort keys %HOOKS) {
     my @handlers = map { @{ $_->{hooks} } } map { @{ $config->{hooks}{$_} } } sort keys %{ $config->{hooks} || {} };
     my @keeping = sort map { $_->{command} =~ / (\S+)\z/ ? $1 : '?' }
       grep { $_->{command} !~ m{>/dev/null 2>&1; exit 0'} } @handlers;
-    is_deeply(\@keeping, $agent eq 'claude' ? ['SessionStart', $PERMISSION] : ['SessionStart'],
+    is_deeply(\@keeping, $agent eq 'claude' ? [sort 'SessionStart', $PERMISSION, keys %ASK] : ['SessionStart'],
         $agent eq 'claude'
-        ? 'claude: only the session start and the permission check keep stdout'
+        ? 'claude: only the session start, the permission check and the asks keep stdout'
         : 'codex: only the session start keeps stdout');
 }
 

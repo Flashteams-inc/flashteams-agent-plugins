@@ -85,7 +85,7 @@ for my $agent (sort keys %PLUGIN) {
         }
     }
 }
-my %KEEPS_STDOUT = (SessionStart => 1, $PERMISSION => 1);
+my %KEEPS_STDOUT = (SessionStart => 1, $PERMISSION => 1, 'ask-permission' => 1, 'ask-elicitation' => 1);
 
 # A stand-in for flashteams.exe. It notes the path it was started by, each
 # argument on a line, and its input, unless STAND_IN_SKIP_INPUT is set, as
@@ -156,6 +156,7 @@ sub run {
         OS                         => 'Windows_NT',
         LOCALAPPDATA               => $LOCAL_WINDOWS,
         FLASH_CONSOLE_AGENT_SOCKET => $SOCKET,
+        FLASH_CONSOLE_PANE         => 'pane-42',
         STAND_IN_LOG               => $log,
         %{ $opt{env} || {} },
     );
