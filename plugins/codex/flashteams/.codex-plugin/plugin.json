@@ -1,7 +1,7 @@
 {
   "name": "flashteams",
-  "version": "1.8.1",
-  "description": "FlashTeams in Codex through Flash Console: a briefing when a session starts, a skill for using the flashteams command, security, SQL and architecture audits recorded in FlashTeams, and hooks that tell Flash Console what Codex is doing.",
+  "version": "1.9.0",
+  "description": "FlashTeams in Codex through Flash Console: a briefing when a session starts, a skill for using the flashteams command, security, SQL and architecture audits recorded in FlashTeams, Flash Design spaces to plan UI in, and hooks that tell Flash Console what Codex is doing.",
   "author": {
     "name": "FlashTeams",
     "url": "https://flashteams.ai"
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "FlashTeams",
     "shortDescription": "FlashTeams through Flash Console, and Codex status there",
-    "longDescription": "Lets Codex use every FlashTeams tool through the flashteams command that Flash Console provides, with your Flash Console sign-in, briefs Codex on FlashTeams when a session starts, runs security, SQL and architecture audits of a repository on this computer and records them in FlashTeams, and tells Flash Console when Codex is working, needs you or is done.",
+    "longDescription": "Lets Codex use every FlashTeams tool through the flashteams command that Flash Console provides, with your Flash Console sign-in, briefs Codex on FlashTeams when a session starts, runs security, SQL and architecture audits of a repository on this computer and records them in FlashTeams, designs UI on Flash Design canvases your team can open and share, and tells Flash Console when Codex is working, needs you or is done.",
     "developerName": "FlashTeams",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],

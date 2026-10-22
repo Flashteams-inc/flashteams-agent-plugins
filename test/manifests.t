@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.8.1';
+my $RELEASE = '1.9.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -91,7 +91,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
     is_deeply(
         [files_in($CLAUDE)],
         [qw(.claude-plugin/plugin.json bin/flashteams hooks/flashteams-hook.pl hooks/flashteams-hook.sh
-            hooks/hooks.json scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flashteams/SKILL.md
+            hooks/hooks.json scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
             skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
         'the Claude Code flashteams plugin holds the hooks, the skills, the scan helper and the shim'
     );
@@ -172,7 +172,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
     is_deeply(
         [files_in($CODEX)],
         [qw(.codex-plugin/plugin.json hooks/flashteams-hook.pl hooks/flashteams-hook.sh hooks/hooks.json
-            scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flashteams/SKILL.md
+            scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
             skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
         'the Codex flashteams plugin holds the hooks, the skills and the scan helper'
     );
