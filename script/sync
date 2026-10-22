@@ -11,15 +11,26 @@
 # Claude Code plugin's permission check, a PreToolUse hook, does the same
 # for every later turn. Only Claude Code puts a plugin's bin folder on its
 # PATH, so only it gets the shim.
+#
+# The three audit skills and the scan helper they run are the same for
+# both agents. Each skill finds the helper two folders above its own, in
+# scan/.
 set -eu
 cd "$(dirname "$0")/.."
 
 allowed='Bash(flashteams:*)'
+audits='security-audit sql-audit architecture-review'
 
 for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
-  mkdir -p "$plugin/hooks" "$plugin/skills/flashteams"
+  mkdir -p "$plugin/hooks" "$plugin/skills/flashteams" "$plugin/scan"
   cp shared/hooks/flashteams-hook.pl shared/hooks/flashteams-hook.sh "$plugin/hooks/"
   cp shared/skills/flashteams/SKILL.md "$plugin/skills/flashteams/"
+  for skill in $audits; do
+    mkdir -p "$plugin/skills/$skill"
+    cp "shared/skills/$skill/SKILL.md" "$plugin/skills/$skill/"
+  done
+  cp shared/scan/flashteams-scan.pl "$plugin/scan/"
+  chmod 755 "$plugin/scan/flashteams-scan.pl"
 done
 
 mkdir -p plugins/claude/flashteams/bin

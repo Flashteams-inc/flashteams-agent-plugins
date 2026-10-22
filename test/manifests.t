@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.7.0';
+my $RELEASE = '1.8.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -86,12 +86,14 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
           for qw(hooks mcpServers skills);
     }
 
-    # flashteams: hooks, the skill and the shim, and no MCP server.
+    # flashteams: hooks, the skills, the scan helper and the shim, and no MCP
+    # server.
     is_deeply(
         [files_in($CLAUDE)],
         [qw(.claude-plugin/plugin.json bin/flashteams hooks/flashteams-hook.pl hooks/flashteams-hook.sh
-            hooks/hooks.json skills/flashteams/SKILL.md)],
-        'the Claude Code flashteams plugin holds the hooks, the flashteams skill and the shim'
+            hooks/hooks.json scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flashteams/SKILL.md
+            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
+        'the Claude Code flashteams plugin holds the hooks, the skills, the scan helper and the shim'
     );
     ok(-x "$ROOT/$CLAUDE/bin/flashteams", 'the Claude Code shim is executable');
     like(slurp("$CLAUDE/bin/flashteams"), qr{\A#!/bin/sh\n}, 'the Claude Code shim is a POSIX sh script');
@@ -170,8 +172,9 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
     is_deeply(
         [files_in($CODEX)],
         [qw(.codex-plugin/plugin.json hooks/flashteams-hook.pl hooks/flashteams-hook.sh hooks/hooks.json
-            skills/flashteams/SKILL.md)],
-        'the Codex flashteams plugin holds the hooks and the flashteams skill'
+            scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flashteams/SKILL.md
+            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
+        'the Codex flashteams plugin holds the hooks, the skills and the scan helper'
     );
     is_deeply(
         [files_in($CODEX_MCP)],
@@ -418,6 +421,24 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     is(slurp("$plugin/$skill"), slurp("shared/$skill"), "$plugin/$skill matches shared/$skill (run script/sync)");
 }
 
+# The audit skills and the scan helper they run: the same in both agents'
+# flashteams plugins, and in neither MCP plugin.
+my @AUDITS = qw(security-audit sql-audit architecture-review);
+for my $plugin ($CLAUDE, $CODEX) {
+    for my $file ('scan/flashteams-scan.pl', map { "skills/$_/SKILL.md" } @AUDITS) {
+        is(slurp("$plugin/$file"), slurp("shared/$file"), "$plugin/$file matches shared/$file (run script/sync)");
+    }
+    ok(-x "$ROOT/$plugin/scan/flashteams-scan.pl", "$plugin: the scan helper is executable");
+}
+ok(-x "$ROOT/shared/scan/flashteams-scan.pl", 'shared/scan/flashteams-scan.pl is executable');
+for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
+    ok(!-e "$ROOT/$plugin/scan", "$plugin has no scan helper");
+    ok(!-e "$ROOT/$plugin/skills/$_", "$plugin has no $_ skill") for @AUDITS;
+}
+my ($scan_version) = slurp('shared/scan/flashteams-scan.pl') =~ /^our \$VERSION = '([^']+)';/m;
+is($scan_version, $RELEASE, "the scan helper is version $RELEASE");
+like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan helper is a Perl program');
+
 # The flashteams skill: Codex's copy is shared/ as it is, and Claude Code's
 # adds one frontmatter line, allowed-tools: Bash(flashteams:*), so the turn
 # that loads the skill runs every flashteams command without Claude Code
@@ -506,6 +527,75 @@ for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
     # The optional MCP plugin's tools are not forbidden.
     like($skill, qr/FlashTeams MCP tools when the optional `flashteams-mcp`/, 'the MCP tools are allowed when installed');
     unlike($skill, qr/Never try to reach FlashTeams another way/, 'no rule against the MCP plugin');
+}
+
+# The audit skills: frontmatter with only a name and a description that
+# says when to use it, the helper found from the skill's own folder in both
+# agents, FlashTeams through the command or the MCP tools, and the rules
+# every audit keeps.
+for my $name (qw(security-audit sql-audit architecture-review)) {
+    my $skill = slurp("shared/skills/$name/SKILL.md");
+    my ($frontmatter) = $skill =~ /\A---\n(.*?\n)---\n/s;
+    my @keys = map { /\A([A-Za-z-]+):/ ? $1 : '?' } split /\n/, $frontmatter // '';
+    is("@keys", 'name description', "the $name skill's frontmatter has only a name and a description");
+    my ($description) = $skill =~ /\A---\nname: \Q$name\E\ndescription: (Use when [^\n]+)\n---\n/;
+    ok($description, "the $name skill is named $name and says when to use it");
+    cmp_ok(length($description // ''), '<=', 1024, "the $name skill description fits both agents");
+
+    like($skill, qr{\.\./\.\./scan/flashteams-scan\.pl}, "$name: the helper is two folders above the skill");
+    like($skill, qr/base directory/, "$name: Claude Code's base directory gives the helper's path");
+    like($skill, qr/path of this `SKILL\.md`/, "$name: Codex's skill path gives the helper's path");
+    like($skill, qr/perl "HELPER" payload --out/, "$name: the skill builds the payload");
+    like($skill, qr/perl "HELPER" send --out/, "$name: the skill records the scan with send");
+    like($skill, qr/record_code_scan/, "$name: record_code_scan, through the command or MCP");
+    like($skill, qr/repository_not_linked/, "$name: the skill asks which product when the repository is not linked");
+    like($skill, qr/--product-id/, "$name: and sends again with the product");
+    like($skill, qr/flashteams file_scan_tasks --scan_id <scan id> --min_severity high/, "$name: tasks through file_scan_tasks");
+    like($skill, qr/wait for a yes/, "$name: tasks and fixes wait for the person");
+    like($skill, qr/MCP tools/, "$name: the MCP tools when the command is not here");
+    like($skill, qr/not sent to FlashTeams/, "$name: says so when neither is there");
+    like($skill, qr/Never commit anything/, "$name: never commits");
+    like($skill, qr/Do not change code unless the person asks/, "$name: changes no code unasked");
+    like($skill, qr/outside the repository/, "$name: keeps the report outside the repository");
+    like($skill, qr/Offer\s+to\s+save\s+a\s+copy\s+of\s+the\s+report\s+into\s+the\s+repository/, "$name: offers a copy in the repository");
+    like($skill, qr/Never print or repeat a secret's value/, "$name: never repeats a secret");
+    like($skill, qr/exit 3, or 127/, "$name: knows the command is missing from its exit code");
+    like($skill, qr/Exit 5: [^\n]*may have been recorded/, "$name: never sends twice after a timeout");
+}
+{
+    my %skill = map { $_ => slurp("shared/skills/$_/SKILL.md") } qw(security-audit sql-audit architecture-review);
+    for my $name (qw(security-audit sql-audit)) {
+        like($skill{$name}, qr/perl "HELPER" doctor/, "$name: checks the scanners first");
+        like($skill{$name}, qr/perl "HELPER" install <tool>/, "$name: offers to install what is missing");
+        like($skill{$name}, qr/agree to/, "$name: installs only what the person agrees to");
+        like($skill{$name}, qr/perl "HELPER" rules`/, "$name: gets the rules through the command");
+        like($skill{$name}, qr/get_scan_rules/, "$name: or through get_scan_rules");
+        like($skill{$name}, qr/perl "HELPER" rules --url '<url>' --sha256 <sha256>/, "$name: passes the MCP answer to rules");
+        like($skill{$name}, qr/perl "HELPER" show --out/, "$name: looks at findings with show");
+        like($skill{$name}, qr/\[hidden\]/, "$name: show hides secrets");
+        like($skill{$name}, qr/"dismiss"/, "$name: dismisses false positives in the notes");
+        like($skill{$name}, qr/beside the scan FlashTeams runs, and never\s+replaces it/, "$name: a laptop scan, beside FlashTeams' own");
+    }
+    like($skill{'security-audit'}, qr/run --kind security --mode quick/, 'security-audit runs a security scan');
+    like($skill{'security-audit'}, qr/\*\*full\*\*: [^\n]*\n[^\n]*\n[^\n]*downloads Trivy's vulnerability database/,
+        'security-audit says full mode downloads Trivy\'s database');
+    like($skill{'sql-audit'}, qr/run --kind sql/, 'sql-audit runs a SQL scan');
+    like($skill{'sql-audit'}, qr/"category": "sql"/, 'sql-audit adds its own findings as sql');
+    for my $check ('row-level security', 'TO PUBLIC', 'SECURITY DEFINER', 'search_path', 'personal data', 'sp_executesql',
+        'database passwords', 'remediation list ordered by risk')
+    {
+        like($skill{'sql-audit'}, qr/\Q$check\E/, "sql-audit reviews: $check");
+    }
+    unlike($skill{'architecture-review'}, qr/HELPER" (?:run|doctor|install)/, 'architecture-review runs no scanners');
+    like($skill{'architecture-review'}, qr/--kind architecture/, 'architecture-review records an architecture review');
+    like($skill{'architecture-review'}, qr/"category": "architecture"/, 'architecture-review adds its findings as architecture');
+    for my $tool (qw(list_products code_map query_codebase read_docs), 'flashteams help query_codebase') {
+        like($skill{'architecture-review'}, qr/\Q$tool\E/, "architecture-review uses $tool");
+    }
+    for my $operation (qw(CYCLES HUBS ORPHANS COMPONENTS IMPACT)) {
+        like($skill{'architecture-review'}, qr/\b$operation\b/, "architecture-review knows query_codebase's $operation");
+    }
+    like($skill{'architecture-review'}, qr/new\s+engineer/, 'architecture-review writes for a new engineer');
 }
 
 # ---------------------------------------------------------------------------

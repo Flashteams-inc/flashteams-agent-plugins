@@ -27,6 +27,9 @@ needs no sign-in of its own. It gives the agent:
   the agent starts, is working, needs your permission or an answer, is done
   or failed, so the agent's tab shows it, and how far the agent got through
   its to-do list, so Flash Console's plan chip can show it.
+- **Security, SQL and architecture audits** of the repository you are in,
+  run on your computer and recorded in FlashTeams. See
+  [Audits](#audits).
 
 **`flashteams-mcp`** is optional. It adds the FlashTeams MCP server, which
 you sign in to with your own FlashTeams account, and the
@@ -100,6 +103,82 @@ the keyboard: a tool it wants to use (Allow, Deny), and an MCP server
 asking to go ahead with nothing to fill in, such as the Supabase server
 before destructive SQL (Accept, Decline). Answer in the terminal leaves the
 question to Claude Code's own prompt. See [The asks](#the-asks).
+
+## Audits
+
+From 1.8.0 the `flashteams` plugin has three audit skills, for both agents.
+In Claude Code they are commands:
+
+| Command | What it does |
+| :- | :- |
+| `/flashteams:security-audit` | Scans for committed secrets and FlashTeams' security and hotspot code rules; in full mode also infrastructure files and dependency vulnerabilities. The agent judges each finding, dismisses false positives, and writes a report with a fix-first list. |
+| `/flashteams:sql-audit` | Runs FlashTeams' SQL rules (`.sql` files, and SQL and NoSQL injection in application code) and checks `.sql` files for secrets, then reviews what rules cannot judge: tables without row-level security, grants to everyone, `SECURITY DEFINER` functions without a fixed `search_path`, personal data stored as plain text, dynamic SQL in stored procedures, and database passwords. Ends with a remediation list ordered by risk. |
+| `/flashteams:architecture-review` | Runs no scanners. Uses the product's FlashTeams code map when there is one (`code_map`, `query_codebase`, `read_docs`), otherwise reads the repository, and writes a report a new engineer can follow: the main parts, how data flows, where the auth boundaries are, then the risks (cycles, modules everything leans on, dead code, coupling, hard-to-reverse choices, bottlenecks). |
+
+In Codex, ask for a security audit, a SQL audit or an architecture review,
+or name the skill.
+
+Each skill runs the plugin's helper, `scan/flashteams-scan.pl`, a Perl
+program (Perl 5.14 or later, with the modules that ship with it, git, and
+curl for downloads):
+
+```sh
+perl flashteams-scan.pl doctor [--json]        # which scanners are here, and how to install the missing ones
+perl flashteams-scan.pl install <tool>...      # gitleaks, opengrep, trivy: pinned versions, checked
+perl flashteams-scan.pl rules                  # FlashTeams' rules, through get_scan_rules
+perl flashteams-scan.pl run --kind security|sql [--mode quick|full] [--path <folder>] --rules <folder> --out <work folder>
+perl flashteams-scan.pl show --out <work folder> --ids 3,12   # findings in full, with the code around them
+perl flashteams-scan.pl payload --out <work folder> --kind ... --summary-file ... --report-file ... [--notes ...]
+perl flashteams-scan.pl send --out <work folder> [--product-id <id>]   # record_code_scan, through the flashteams command
+```
+
+- **The scanners** are gitleaks 8.30.1 (secrets), opengrep 1.30.0
+  (FlashTeams' code rules; semgrep runs them in its place when opengrep is
+  missing) and Trivy 0.74.0, the versions FlashTeams' own scanner uses.
+  The agent offers to install what is missing and waits for your yes.
+  `install` downloads each from its GitHub release into
+  `~/.flashteams/tools/bin` (or `FLASHTEAMS_TOOLS_DIR`) for macOS or Linux
+  on arm64 or x64, checks it against a pinned checksum, and changes nothing
+  else; on a Mac, `brew install gitleaks trivy` works too. On Windows,
+  `install` points to the release pages instead.
+- **FlashTeams' rules** come from the `get_scan_rules` tool, which gives a
+  link that works for ten minutes. The helper checks the download against
+  its checksum, refuses any file in it that would land outside its folder,
+  and keeps it in `~/.flashteams/scan-rules` (or `FLASHTEAMS_RULES_DIR`).
+  Without the rules, gitleaks and Trivy run with their own, and opengrep is
+  recorded as skipped.
+- **The work folder** is under your system's temporary folder,
+  `flashteams-scan/<repository>-<kind>-<date>-<time>`, never inside the
+  repository. It holds the helper's files, the agent's notes, and the
+  report, which the agent copies into the repository only if you ask.
+- **Results go to FlashTeams** with `record_code_scan`, through the
+  `flashteams` command, or through the FlashTeams MCP tools when the
+  `flashteams-mcp` plugin gives them. They show beside the scan FlashTeams
+  runs, and never replace it. The answer says what is new and what was
+  fixed since the last scan. If FlashTeams does not know which product the
+  checkout belongs to, the agent asks you and sends again. It offers to
+  file tasks for the critical and high findings (`file_scan_tasks`) and to
+  fix them, and does either only after you agree. Without the command or
+  the MCP tools, the report stays on your computer.
+
+**What never leaves your computer:** your code; any secret's value, which
+the helper never prints or writes (gitleaks runs with `--redact`, its
+`Secret` and `Match` fields are dropped as they are read, and `show` prints
+`[hidden]` in its place); the scanners' own reports, which quote the code
+and are deleted once read; and the folders and user name of your computer.
+What is sent is `payload.json` in the work folder, which you can read
+first: each finding's rule, file path, line, severity and the rule's
+words or the agent's notes, the tools that ran, the summary and report the
+agent wrote, and git's facts about the checkout: the remote address with
+any user name or password taken out, the branch, the commit, and whether
+there were changes not committed.
+
+The scanners run on your computer. gitleaks and opengrep use no network;
+opengrep keeps its own unpacked program files in `~/.cache/opengrep`.
+Trivy's infrastructure check runs offline, and its dependency check, in
+full mode only, downloads Trivy's vulnerability database (several hundred
+MB the first time, kept in Trivy's cache or `FLASHTEAMS_TRIVY_CACHE`).
+Trivy runs with its usage data turned off.
 
 ## Sandboxes
 
@@ -204,6 +283,10 @@ codex plugin add flashteams@flashteams
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
 
+**Coming from 1.7.0:** the `flashteams` plugin gains the security, SQL and
+architecture audits (see [Audits](#audits)) and the scan helper they run.
+The hooks are unchanged.
+
 **Coming from 1.4.0:** the hooks also tell Flash Console the agent's plan:
 Claude Code's to-do list or tasks, and Codex's plan, step by step, so Flash
 Console's plan chip shows how far the agent got ("Plan 3 of 5") and lists
@@ -275,6 +358,9 @@ choose `flashteams`, then **Clear authentication**; in Codex,
   the command nor the agent ever sees them.
 - The MCP server in `flashteams-mcp` is separate: the agent talks to
   FlashTeams with your own account only when it uses a FlashTeams tool.
+- The audits' scan helper sends only what [Audits](#audits) describes, and
+  only when the agent records a scan. It never prints or keeps a secret's
+  value.
 
 ## The protocol (version 1)
 
@@ -743,21 +829,25 @@ plugins/claude/flashteams/          the Claude Code plugin
   hooks/hooks.json                  which hooks run the hook program
   hooks/flashteams-hook.sh          copy of shared/hooks/
   hooks/flashteams-hook.pl          copy of shared/hooks/
+  scan/flashteams-scan.pl           copy of shared/scan/, the audits' helper
   skills/flashteams/                copy of shared/skills/, plus allowed-tools
+  skills/security-audit/            copies of shared/skills/
+  skills/sql-audit/
+  skills/architecture-review/
 plugins/claude/flashteams-mcp/      the optional Claude Code MCP plugin
   .claude-plugin/plugin.json
   .mcp.json                         the FlashTeams MCP server
   skills/flashteams-next-task/      copy of shared/skills/
 plugins/codex/flashteams/           the Codex plugin
   .codex-plugin/plugin.json
-  hooks/ and skills/flashteams/     as above
+  hooks/, scan/ and skills/         as above, without allowed-tools
 plugins/codex/flashteams-mcp/       the optional Codex MCP plugin
   .codex-plugin/plugin.json
   .mcp.json and skills/             as above
-shared/                             the hook program, shim and skills, edited here
+shared/                             the hook program, shim, scan helper and skills, edited here
 script/check                        every check, as CI runs it
 script/sync                         copies shared/ into the plugins
-test/                               tests: hook.t, windows.t, bin.t, manifests.t
+test/                               tests: hook.t, windows.t, ask.t, bin.t, scan.t, manifests.t
 ```
 
 Each plugin keeps its own copy of the shared files because each agent
@@ -786,8 +876,8 @@ one appears.
 
 ## Contributing
 
-1. Edit the hook program, the shim and the skills in `shared/`, never the
-   copies, then run `script/sync`.
+1. Edit the hook program, the shim, the scan helper and the skills in
+   `shared/`, never the copies, then run `script/sync`.
 2. Run `script/check`. It compiles the Perl, runs ShellCheck on the shell
    scripts, runs Claude Code's plugin validator when `claude` is installed,
    and runs the tests. GitHub Actions runs the same script on macOS and
@@ -797,8 +887,9 @@ one appears.
    `plugins/claude/flashteams-mcp/.claude-plugin/plugin.json`,
    `plugins/codex/flashteams/.codex-plugin/plugin.json`,
    `plugins/codex/flashteams-mcp/.codex-plugin/plugin.json`) and `$VERSION`
-   in `shared/hooks/flashteams-hook.pl` together (the tests check they
-   match). People only receive an update when the version changes.
+   in `shared/hooks/flashteams-hook.pl` and `shared/scan/flashteams-scan.pl`
+   together (the tests check they match). People only receive an update
+   when the version changes.
 
 The tests run the hook exactly as each agent does, with the command from its
 `hooks.json`, for every event of both agents, against a throwaway socket.
@@ -869,9 +960,30 @@ PowerShell 5.1 and a real Git Bash need a Windows PC; see [Windows](#windows).
 command, on a Mac and as on Windows, and `test/manifests.t` checks both
 marketplaces, all four plugins and the skills, including Claude Code's
 `allowed-tools`, the permission check in Claude Code's `hooks.json`, that
-Codex has none, and each agent's Windows commands.
+Codex has none, each agent's Windows commands, and that the audit skills
+and the scan helper are the same in both agents' `flashteams` plugins.
 
-You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10),
+`test/scan.t` runs the audits' scan helper without the network, against
+stand-ins for gitleaks, opengrep, semgrep, Trivy, curl and the `flashteams`
+command that write reports shaped like the real ones, inside git
+repositories it makes. It checks `doctor`'s report and install choices;
+that `install` refuses Windows and a download that fails its checksum, and
+the pins; that `rules` refuses a wrong checksum, another format and paths
+that would leave its folder, reuses a copy it already has, and asks
+FlashTeams through the `flashteams` command; each scanner's findings as one
+list (categories, severities, titles, CWE), with files git ignores left
+out; the SQL audit's filters; a missing scanner, semgrep in opengrep's
+place, and no rules; fingerprints that stay when lines move and differ for
+repeats; `show` with secrets as `[hidden]`; the payload's exact fields,
+git's facts (no user name or password in the remote address, changes not
+committed, a detached checkout, no commits yet), the agent's notes, the cap
+of 500 findings and the summary and report caps, and that no folder of the
+computer is in it; that `send` passes every field and the findings, and
+passes on the command's answer and exit code; and that no secret's value
+appears in any file the helper wrote or anything it printed.
+
+You need Perl 5.20 or later to run the tests (the hook itself runs on 5.10,
+the scan helper on 5.14),
 bash for the shell-option tests (they are skipped without it), and
 ShellCheck, which also checks each command in `hooks.json` and the guard it
 runs, leaving out the `$(exit 0); ` that `test/manifests.t` checks. `pwsh`

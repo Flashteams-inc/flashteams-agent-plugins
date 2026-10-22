@@ -12,13 +12,15 @@ cd "$(dirname "$0")/.."
 
 step() { printf '\n==> %s\n' "$*"; }
 
-step "Perl compiles the hook and the tests"
+step "Perl compiles the hook, the scan helper and the tests"
 perl -c shared/hooks/flashteams-hook.pl
+perl -c shared/scan/flashteams-scan.pl
 perl -c test/hook.t
 perl -c test/manifests.t
 perl -c test/bin.t
 perl -c test/windows.t
 perl -c test/ask.t
+perl -c test/scan.t
 
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then
