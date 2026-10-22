@@ -623,7 +623,14 @@ my $RULES;
     $r = helper(cwd => $REPO, args => ['rules']);
     is($r->{status}, 0, 'rules asks FlashTeams for the rules');
     is($r->{stdout}, "$cache/fedcba987654\n", 'and unpacks what it answered');
-    is(slurp("$TMP/ft-args"), "get_scan_rules\0--output\0json\0", 'through flashteams get_scan_rules --output json');
+    is(slurp("$TMP/ft-args"), "get_scan_rules\0", 'through flashteams get_scan_rules, which prints the tool\'s own answer');
+
+    # The same answer wrapped the way --output json wraps it still reads.
+    write_file("$TMP/ft-rules-answer", $JSON->encode({ text => $JSON->encode({ success => JSON::PP::true, url => $asked, sha256 => $asked_sum,
+        version => 'fedcba987654' }) }));
+    $r = helper(cwd => $REPO, args => [ 'rules', '--dir', "$TMP/wrapped-cache" ]);
+    is($r->{status}, 0, 'rules reads an answer wrapped in text');
+    is($r->{stdout}, "$TMP/wrapped-cache/fedcba987654\n", 'and unpacks it');
 
     write_file("$TMP/ft-rules-answer", $JSON->encode({ success => JSON::PP::false, reason => 'not_allowed' }));
     $r = helper(cwd => $REPO, args => [ 'rules', '--dir', $other ], env => { FAKE_FT_EXIT => 1 });
@@ -1072,7 +1079,7 @@ sub payload {
     my @args = split /\0/, slurp("$TMP/ft-args");
     my %given = map { /\A--([a-z_]+)=(.*)\z/s ? ($1 => $2) : () } @args;
     is($args[0], 'record_code_scan', 'send runs record_code_scan');
-    is_deeply([ @args[ -4 .. -1 ] ], [ '--findings', '-', '--output', 'json' ], 'with the findings on standard input, and the answer as JSON');
+    is_deeply([ @args[ -2 .. -1 ] ], [ '--findings', '-' ], 'with the findings on standard input, last');
     is_deeply([ sort keys %given ], [ sort qw(kind mode repository scanned_path rules_version tools summary report_markdown truncated) ],
         'every other field as an argument of its own');
     is_deeply([ @given{qw(kind mode scanned_path rules_version truncated)} ], [ 'security', 'quick', '', 'abc123def456', 0 ], 'text and numbers as they are');

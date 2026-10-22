@@ -66,7 +66,7 @@ use JSON::PP ();
 use POSIX ();
 use Time::HiRes ();
 
-our $VERSION = '1.8.0';
+our $VERSION = '1.8.1';
 
 my @SEVERITIES = qw(critical high medium low info);
 my %SEVERITY_RANK = map { $SEVERITIES[$_] => $_ } 0 .. $#SEVERITIES;
@@ -751,6 +751,26 @@ sub cached_bundle {
     return undef;
 }
 
+# A FlashTeams tool's answer from the flashteams command's stdout. The
+# command prints the tool's own JSON; with --output json it wraps it as
+# {"text": "<that JSON>"}, and an MCP result may carry it under result. Any
+# of the three reads the same.
+sub tool_answer {
+    my ($stdout) = @_;
+    my $answer = eval { json_codec()->decode($stdout) };
+    for (1 .. 2) {
+        last unless ref $answer eq 'HASH' && !exists $answer->{success} && !exists $answer->{url};
+        if (defined $answer->{text} && !ref $answer->{text}) {
+            my $inner = eval { json_codec()->decode($answer->{text}) };
+            $answer = $inner if ref $inner eq 'HASH';
+        }
+        elsif (ref $answer->{result} eq 'HASH') {
+            $answer = $answer->{result};
+        }
+    }
+    return $answer;
+}
+
 # The rules' address and checksum from FlashTeams, through the flashteams
 # command: get_scan_rules, which only reads. A refusal is passed on with the
 # command's own exit code.
@@ -758,11 +778,10 @@ sub ask_for_rules {
     my ($organization) = @_;
     my $program = flashteams_program();
     my $result = capture(
-        [ $program, 'get_scan_rules', (defined $organization && $organization ne '' ? "--organization_id=$organization" : ()), '--output', 'json' ],
+        [ $program, 'get_scan_rules', (defined $organization && $organization ne '' ? "--organization_id=$organization" : ()) ],
         timeout => 300
     );
-    my $answer = eval { json_codec()->decode($result->{stdout}) };
-    $answer = $answer->{result} if ref $answer eq 'HASH' && !exists $answer->{url} && ref $answer->{result} eq 'HASH';
+    my $answer = tool_answer($result->{stdout});
     if ($result->{status} != 0 || ref $answer ne 'HASH' || (exists $answer->{success} && !$answer->{success})) {
         my $why = ref $answer eq 'HASH' ? clip($answer->{reason} // $answer->{message} // $answer->{error} // '', 300) : '';
         $why = first_error($result->{stderr}) if $why eq '';
@@ -2024,7 +2043,8 @@ sub send_arguments {
     for my $key (sort keys %extra) {
         push @args, "--$key=" . bytes_of($extra{$key}) if defined $extra{$key} && $extra{$key} ne '';
     }
-    push @args, '--findings', '-', '--output', 'json';
+    # The command then prints the tool's own JSON answer, as the agent reads it.
+    push @args, '--findings', '-';
     return @args;
 }
 

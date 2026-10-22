@@ -1,7 +1,7 @@
 {
   "name": "flashteams-mcp",
   "displayName": "FlashTeams MCP",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Connects Claude Code to the FlashTeams MCP server with your own FlashTeams sign-in, and adds a skill for working your next task. Optional: the flashteams plugin already gives Claude Code every FlashTeams tool inside Flash Console.",
   "author": {
     "name": "FlashTeams",
