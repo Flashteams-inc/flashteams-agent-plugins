@@ -35,6 +35,14 @@ person the artboards as files.
   the FlashTeams project or task it plans (`project_id`, `task_id`), when
   the person asks. A space tied to a task shows on the task and on its
   project.
+- `design_view`: what the person has open in the space now: the page,
+  the artboards they chose, and the element they picked inside one (its
+  file, its number, its words and style).
+- `design_comments`: the review threads on the space, each pinned to an
+  artboard or a spot on the canvas, open ones unless `include_resolved`.
+- `design_comment`: `start` a thread pinned to an artboard (`board`, and
+  `dx`, `dy` from its top left), `reply` in one (`thread_id`), or
+  `resolve` or `reopen` one.
 - `design_delete`: only when the person asks for that space to be deleted.
   It is gone for everyone it is shared with. Never delete one to start
   over: `design_write` replaces its files.
@@ -85,6 +93,20 @@ flashteams design_create --title "Checkout" --index "$(cat space.json)" --files 
    read them. Read them again, redo your change on what they hold now, and
    save with their new versions. After a third refusal, stop and tell the
    person.
+
+## What the person points at, and their comments
+
+- When they say "this", "here", "the one I picked" or "make it bigger"
+  without naming it, `design_view` first. Change the element it names in
+  that file, and nothing else.
+- When they ask you to work through the feedback, or before you revise a
+  space others reviewed, `design_comments`. Do what each open thread asks,
+  then `reply` in it with what you changed, in a line. `resolve` a thread
+  only when the person asked you to, or what it asks is plainly done.
+- A thread you cannot act on (a question for the person, a choice that is
+  theirs): reply saying so, and leave it open.
+- Comments are for the people reviewing: never use them for your own notes
+  or progress.
 
 ## The index, `space.json`
 
