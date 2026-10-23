@@ -76,7 +76,7 @@ Flash Console's socket: run them outside the sandbox when Codex asks.
    checks their checksum, and prints the rules folder on its last line.
    With only the MCP tools: call `get_scan_rules`, then
    `perl "HELPER" rules --url '<url>' --sha256 <sha256>` with its answer
-   (the link works for ten minutes). If neither works, go on without
+   straight away (the link works once, within two minutes). If neither works, go on without
    rules: gitleaks and Trivy still run with their own rules, and opengrep
    is recorded as skipped.
 

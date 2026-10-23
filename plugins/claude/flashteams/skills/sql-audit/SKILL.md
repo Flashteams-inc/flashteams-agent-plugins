@@ -64,7 +64,8 @@ Console's socket: run them outside the sandbox when Codex asks.
 4. **Get FlashTeams' rules.** `perl "HELPER" rules` asks FlashTeams for
    them (`get_scan_rules`, which only reads) and prints the rules folder
    on its last line. With only the MCP tools: call `get_scan_rules`, then
-   `perl "HELPER" rules --url '<url>' --sha256 <sha256>`. Without rules
+   `perl "HELPER" rules --url '<url>' --sha256 <sha256>` straight away
+   (the link works once, within two minutes). Without rules
    the SQL rules cannot run, and your own review (step 7) carries the
    audit.
 

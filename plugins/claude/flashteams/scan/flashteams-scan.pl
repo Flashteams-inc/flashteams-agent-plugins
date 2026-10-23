@@ -827,7 +827,7 @@ sub cmd_rules {
     if ($result->{status} != 0 || !-f $download) {
         remove_tree($work);
         my $why = first_error($result->{stderr}) || "curl exited $result->{status}";
-        fail(1, "The rules download failed: $why. The link works for ten minutes; ask FlashTeams for a new one (get_scan_rules).");
+        fail(1, "The rules download failed: $why. The link works once, within two minutes; ask FlashTeams for a new one (get_scan_rules).");
     }
     my $bytes = read_bytes($download, MAX_BUNDLE);
     unlink($download);

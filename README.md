@@ -142,7 +142,8 @@ perl flashteams-scan.pl send --out <work folder> [--product-id <id>]   # record_
   else; on a Mac, `brew install gitleaks trivy` works too. On Windows,
   `install` points to the release pages instead.
 - **FlashTeams' rules** come from the `get_scan_rules` tool, which gives a
-  link that works for ten minutes. The helper checks the download against
+  link that works once, within two minutes, and says nothing about who
+  asked. The helper checks the download against
   its checksum, refuses any file in it that would land outside its folder,
   and keeps it in `~/.flashteams/scan-rules` (or `FLASHTEAMS_RULES_DIR`).
   Without the rules, gitleaks and Trivy run with their own, and opengrep is
