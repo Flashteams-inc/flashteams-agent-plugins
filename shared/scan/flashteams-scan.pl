@@ -66,7 +66,7 @@ use JSON::PP ();
 use POSIX ();
 use Time::HiRes ();
 
-our $VERSION = '1.9.1';
+our $VERSION = '1.9.2';
 
 my @SEVERITIES = qw(critical high medium low info);
 my %SEVERITY_RANK = map { $SEVERITIES[$_] => $_ } 0 .. $#SEVERITIES;

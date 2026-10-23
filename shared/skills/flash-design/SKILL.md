@@ -31,13 +31,19 @@ person the artboards as files.
 - `design_write`: save files, each with the version you read
   (`base_version`, 0 for a new file); `content: null` removes one.
 - `design_upload`: a picture or a font, answered with `asset:<id>`.
-- `design_share`: rename it or change who it is shared with, when the
-  person asks.
+- `design_share`: rename it, change who it is shared with, or tie it to
+  the FlashTeams project or task it plans (`project_id`, `task_id`), when
+  the person asks. A space tied to a task shows on the task and on its
+  project.
+- `design_delete`: only when the person asks for that space to be deleted.
+  It is gone for everyone it is shared with. Never delete one to start
+  over: `design_write` replaces its files.
 - `design_import`: a Claude Design canvas brought across as a new space,
   when the person asks to move one: read its `project/canvas.json` and its
   `project/*.dc.html` files with your Artifact tool and pass them as they
   are. Upload each picture it lists in `pictures_to_upload` with
-  `design_upload`, then swap its `/_blob/` address for the `asset:<id>`.
+  `design_upload`, `replaces` set to its `/_blob/` address: every artboard
+  showing it then names the new asset, with nothing to rewrite.
 
 Long text goes in on standard input, one argument at a time: write the
 files to a JSON file and pass the rest as flags, so the shell changes
