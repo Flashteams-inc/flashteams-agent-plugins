@@ -39,9 +39,14 @@ person the artboards as files.
   are. Upload each picture it lists in `pictures_to_upload` with
   `design_upload`, then swap its `/_blob/` address for the `asset:<id>`.
 
-Long text goes in on standard input: put the whole call in a JSON file and
-run `flashteams design_write --json - < call.json`, so the shell changes
-nothing in your HTML.
+Long text goes in on standard input, one argument at a time: write the
+files to a JSON file and pass the rest as flags, so the shell changes
+nothing in your HTML:
+
+```sh
+flashteams design_write --space_id <id> --files - < files.json
+flashteams design_create --title "Checkout" --index "$(cat space.json)" --files - < files.json
+```
 
 ## Making a space
 
