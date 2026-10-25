@@ -58,7 +58,7 @@ use JSON::PP ();
 use Socket qw(SOCK_STREAM);
 use Time::HiRes ();
 
-our $VERSION = '1.9.4';
+our $VERSION = '1.9.5';
 
 use constant {
     PROTOCOL_VERSION => 1,

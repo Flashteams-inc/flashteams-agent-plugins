@@ -43,6 +43,15 @@ person the artboards as files.
 - `design_comment`: `start` a thread pinned to an artboard (`board`, and
   `dx`, `dy` from its top left), `reply` in one (`thread_id`), or
   `resolve` or `reopen` one.
+- `design_systems`: the organization's design systems and the person's
+  default; with `system_id`, one whole: its README and guidelines, its
+  tokens as CSS variables with their values in each theme, and its
+  components with their props.
+- `design_install_system`: install a design system into a space, bring
+  one up to date, or take it out (`remove`), when the person asks.
+- `design_export`: a PNG of each artboard, a PDF or one HTML file that
+  plays in any browser, answered with a link that downloads it for an
+  hour. Give the person the link.
 - `design_delete`: only when the person asks for that space to be deleted.
   It is gone for everyone it is shared with. Never delete one to start
   over: `design_write` replaces its files.
@@ -64,18 +73,23 @@ flashteams design_create --title "Checkout" --index "$(cat space.json)" --files 
 
 ## Making a space
 
-1. Read what the person gave you. When two or more choices that change the
+1. Read what the person gave you, and `design_systems`: when there is a
+   default (`defaults.applies`), read it whole with `system_id` and design
+   with it, unless the person asked for another look. When two or more choices that change the
    result are still open (which job the screen does first, who it is for,
    what of their product to keep), ask them once, at most four questions,
    each with two to four concrete options and your pick first. Otherwise
    decide, and say what you assumed in one line.
-2. Settle the look before the first artboard: their product's own colours,
+2. Settle the look before the first artboard: the design system's tokens
+   and components when there is one; else their product's own colours,
    type and spacing when you can read them (its CSS, its theme files, a
    screenshot), else a small system of your own for this subject: one or
    two typefaces, a ground, one or two accents.
 3. `design_create` with a `title` the person would use, `project_id` or
    `task_id` when it plans FlashTeams work, the `index` and the first
-   artboard in `files`. Give the person its `link` at once.
+   artboard in `files`. It starts with the default design system installed
+   (its `design_system` names the folder); `design_system: "none"` when the
+   person wants it without. Give the person its `link` at once.
 4. The rest one at a time, in the order of `order`: write one artboard,
    save it with `design_write`, then the next, so each appears as you go.
    Send `space.json` again only when you add, move or resize artboards or
@@ -107,6 +121,49 @@ flashteams design_create --title "Checkout" --index "$(cat space.json)" --files 
   theirs): reply saying so, and leave it open.
 - Comments are for the people reviewing: never use them for your own notes
   or progress.
+
+## Design systems
+
+A design system is a space of its own (`kind: "design_system"`), holding
+the organization's look: `tokens.json`, `README.md` with its guidelines,
+and its components as artboards under `components/`. Installed into a
+space, its files are copied under `ds/<folder>/`.
+
+- Draw with its tokens, never their raw values: `color: var(--color-text)`,
+  `padding: var(--space-4)`, `border-radius: var(--radius-md)`,
+  `font-family: var(--font-sans)`. Each theme has its own values, and the
+  canvas's Theme menu shows every artboard in each, so an artboard drawn
+  with tokens works in dark at once. Give the root of each artboard
+  `background: var(--color-background)`.
+- Use its components rather than drawing your own:
+  `<fd-use src="ds/acme/components/Button.fd.html" label="Place order" variant="primary"></fd-use>`.
+  Props are attributes: words as they are, a number or `true` as
+  `{{3}}` or `{{true}}`.
+- Follow its README's guidelines.
+- When the person asks for a design system (from their codebase, a brand,
+  a screenshot), `design_create` with `kind: "design_system"` and no files
+  starts one with neutral tokens, a README and four components: read it,
+  then change `tokens.json`, the README and the components to theirs.
+  `tokens.json` is `{"v": 1, "themes": ["light", "dark"], "fontImports":
+  [Google Fonts stylesheets], "color": {"text": {"light": "#18181b",
+  "dark": "#f4f4f5"}}, "space": {"4": "16px"}, ...}`: groups of tokens,
+  each a value for every theme or one per theme; each is the variable
+  `--<group>-<name>`. A component declares its props in `data-props` with
+  their defaults, its `$size`, a `<fd-style>body { margin: 0; }</fd-style>`
+  and nothing else in `<fd-style>`; never name a prop `src` or `size`.
+
+## Prototypes, presenting and exports
+
+- Mark each artboard whose controls work `interactive: true` and link the
+  flow with `<a href="Next.fd.html">`. The person plays it, or hands on
+  `<link>?play=Main.fd.html`, which opens it playing.
+- `<link>?present=<page id>` presents a page's artboards in reading order,
+  row by row from the top, so lay a deck out in rows.
+- A printed page: `print: "fixed"` with `paper` `"letter"` (816 × 1056) or
+  `"a4"` (794 × 1123), one artboard per page. A document that runs over
+  pages: `print: "flow"`, its root `width` the paper's, its padding the
+  page margin (it repeats on every page), no fixed height, `h` as tall as
+  it runs. Export a PDF with `design_export` when the person wants one.
 
 ## The index, `space.json`
 
@@ -143,6 +200,8 @@ flashteams design_create --title "Checkout" --index "$(cat space.json)" --files 
   `color` gray, red, orange, green, teal, blue, purple or pink). Keep the
   shapes a person drew (`rect`, `oval`, `line`, `arrow`, `pen`, `image`)
   as they are.
+- `designSystems`: the design systems installed, each `{space, title,
+  folder, version}`. Leave it as it is; `design_install_system` changes it.
 - Paths: letters, digits, `_`, `.` and `-`, folders split by `/`, each
   artboard ending `.fd.html`. Keep every key of an index you did not
   change.
