@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.9.5';
+my $RELEASE = '1.9.6';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -512,7 +512,7 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
     like($skill, qr/^\| 3 \|[^\n]*full path[^\n]*once/m, 'exit 3: the briefing\'s full path, once');
     like($skill, qr/Check first with a read/,           'exit 5: a change is checked before it is repeated');
     like($skill, qr/`ask_flashbrain` that took too long:\*\* never ask again/, 'exit 5: FlashBrain is never asked twice');
-    like($skill, qr/list_pending_approvals/,            'exit 5: a slow FlashBrain run is looked up');
+    like($skill, qr/`get_flashbrain_answer`: with the\s+`session_id`/, 'exit 5: a slow FlashBrain run is looked up');
     unlike($skill, qr/Wait a moment and try once more/, 'exit 5: no blanket retry');
 
     # Flash Console asks the person before the actions that need it, and
@@ -589,7 +589,7 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     unlike($skill{'architecture-review'}, qr/HELPER" (?:run|doctor|install)/, 'architecture-review runs no scanners');
     like($skill{'architecture-review'}, qr/--kind architecture/, 'architecture-review records an architecture review');
     like($skill{'architecture-review'}, qr/"category": "architecture"/, 'architecture-review adds its findings as architecture');
-    for my $tool (qw(list_products code_map query_codebase read_docs), 'flashteams help query_codebase') {
+    for my $tool (qw(code_map query_codebase read_docs), 'flashteams help query_codebase') {
         like($skill{'architecture-review'}, qr/\Q$tool\E/, "architecture-review uses $tool");
     }
     for my $operation (qw(CYCLES HUBS ORPHANS COMPONENTS IMPACT)) {

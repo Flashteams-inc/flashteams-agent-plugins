@@ -110,8 +110,8 @@ After exit 5:
   not there.
 - **`ask_flashbrain` that took too long:** never ask again, which would
   start a second, paid run. The first run carries on. Check
-  `list_pending_approvals`, and `get_flashbrain_answer` with the
-  `session_id` if you have one.
+  `get_flashbrain_answer`: with the `session_id` if you have one, and
+  with none for the approvals still waiting on a decision.
 
 ## Sandboxes
 

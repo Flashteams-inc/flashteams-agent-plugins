@@ -48,10 +48,11 @@ and tell the person the results were not sent to FlashTeams.
    written out in every step. Run every command from inside the
    repository.
 
-2. **Find the product.** `flashteams list_products`, and pick the product
-   this repository belongs to (by its repository address or name; ask the
-   person when it is not clear). If that product has a code map, use it:
-   - `flashteams code_map` for the map of its parts;
+2. **Find the product.** `flashteams code_map` with no product lists the
+   products; pick the one this repository belongs to (by its repository
+   address or name; ask the person when it is not clear). If that product
+   has a code map, use it:
+   - `flashteams code_map --products <name>` for the map of its parts;
    - `flashteams help query_codebase` first, then `query_codebase` with
      operations such as CYCLES (dependency cycles), HUBS (modules
      everything leans on), ORPHANS (code nothing uses), COMPONENTS (the
