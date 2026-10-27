@@ -1,0 +1,17 @@
+{
+  "name": "flashteams",
+  "version": "1.10.0",
+  "description": "FlashTeams in Grok CLI through Flash Console: a skill for using the flashteams command, security, SQL and architecture audits recorded in FlashTeams, Flash Design spaces to plan UI in, and hooks that tell Flash Console what Grok CLI is doing.",
+  "author": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "homepage": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "repository": "https://github.com/Flashteams-inc/flashteams-agent-plugins",
+  "license": "MIT",
+  "keywords": [
+    "flashteams",
+    "flash-console",
+    "tasks"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "flashteams": {
+      "type": "http",
+      "url": "https://flashteams-mcp-server.nisitha.workers.dev/mcp"
+    }
+  }
+}

@@ -5,8 +5,8 @@
 #   script/check
 #
 # Needs Perl (any 5.20 or later) and ShellCheck. Without ShellCheck it skips
-# that step on your computer, but not in CI. When the claude command is
-# installed it also runs Claude Code's own plugin validator.
+# that step on your computer, but not in CI. When the claude or grok command
+# is installed it also runs that agent's own plugin validator.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -25,12 +25,13 @@ perl -c test/scan.t
 step "ShellCheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shellcheck shared/hooks/flashteams-hook.sh shared/bin/flashteams script/check script/sync
-  # Each hook command in both hooks.json files, and the guard script it
-  # hands to sh -c, checked as an sh script of its own. Claude Code's
-  # commands start with $(exit 0); which stops PowerShell on a Windows PC
-  # without Git Bash and does nothing in sh. ShellCheck would take it for a
-  # mistake, so it is checked by test/manifests.t instead, and left out
-  # here. Codex's commandWindows is PowerShell, which test/windows.t checks.
+  # Each hook command in every hooks.json file, and the guard script it
+  # hands to sh -c, checked as an sh script of its own. Claude Code's and
+  # Grok CLI's commands start with $(exit 0); which stops PowerShell on a
+  # Windows PC without Git Bash and does nothing in sh. ShellCheck would
+  # take it for a mistake, so it is checked by test/manifests.t instead, and
+  # left out here. Codex's commandWindows is PowerShell, which
+  # test/windows.t checks.
   commands=$(mktemp -d)
   trap 'rm -rf "$commands"' EXIT
   perl -MJSON::PP -e '
@@ -47,7 +48,8 @@ if command -v shellcheck >/dev/null 2>&1; then
           print $out "#!/bin/sh\n$script\n";
         }
       }
-    }' "$commands" plugins/claude/flashteams/hooks/hooks.json plugins/codex/flashteams/hooks/hooks.json
+    }' "$commands" plugins/claude/flashteams/hooks/hooks.json plugins/codex/flashteams/hooks/hooks.json \
+    plugins/grok/flashteams/hooks/hooks.json
   shellcheck "$commands"/*.sh
   echo "ShellCheck found nothing"
 elif [ -n "${CI:-}" ]; then
@@ -64,6 +66,14 @@ if command -v claude >/dev/null 2>&1; then
   claude plugin validate --strict plugins/claude/flashteams-mcp
 else
   echo "The claude command is not installed, so this step was skipped"
+fi
+
+step "Grok CLI plugin validator"
+if command -v grok >/dev/null 2>&1; then
+  grok plugin validate plugins/grok/flashteams
+  grok plugin validate plugins/grok/flashteams-mcp
+else
+  echo "The grok command is not installed, so this step was skipped"
 fi
 
 step "Tests"

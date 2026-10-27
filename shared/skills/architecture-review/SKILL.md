@@ -26,6 +26,10 @@ the `scan` folder two levels above this skill's folder:
   The helper is `<base directory>/../../scan/flashteams-scan.pl`.
 - Codex shows the path of this `SKILL.md`. The helper is
   `<the folder holding SKILL.md>/../../scan/flashteams-scan.pl`.
+- Grok CLI: the same, from the path of this `SKILL.md` when it shows it.
+  If it does not, the helper is the one
+  `find "${GROK_HOME:-$HOME/.grok}/installed-plugins" -name flashteams-scan.pl`
+  prints.
 
 Below, `HELPER` stands for that full path. Write it out in double quotes in
 every command, as `perl "HELPER" ...`.

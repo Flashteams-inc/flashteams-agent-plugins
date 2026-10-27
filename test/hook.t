@@ -35,6 +35,7 @@ my $ROOT = abs_path("$FindBin::Bin/..");
 my %PLUGIN = (
     claude => "$ROOT/plugins/claude/flashteams",
     codex  => "$ROOT/plugins/codex/flashteams",
+    grok   => "$ROOT/plugins/grok/flashteams",
 );
 my $HOOK_PL = "$ROOT/shared/hooks/flashteams-hook.pl";
 
@@ -65,7 +66,7 @@ my $UNSAFE = qr/[\x00-\x1f\x7f-\x9f\x{061C}\x{200B}-\x{200F}\x{2028}-\x{202E}\x{
 # the variable that holds the plugin's folder in that command. A command is
 # known by the last word it hands the starter: the hook's own name, or for
 # Claude Code's permission check on Bash commands, flashteams-permission.
-my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
+my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT', grok => 'GROK_PLUGIN_ROOT');
 my $PERMISSION = 'flashteams-permission';
 # What Claude Code's commands start with, so that PowerShell, which runs
 # them on a Windows PC without Git Bash, stops there; in sh it does nothing.
@@ -658,6 +659,154 @@ for my $hook (sort keys %codex_cases) {
         undef, 'codex PreToolUse for other tools: nothing sent');
     is(codex('SubagentStop', { agent_id => 'sub-1' }, name => 'codex SubagentStop'),
         undef, 'codex hooks the plugin does not use: nothing sent');
+}
+
+# ---------------------------------------------------------------------------
+# Grok CLI
+
+my %GROK_INPUT = (
+    sessionId       => 'grk-3',
+    session_id      => 'grk-3',
+    cwd             => $CWD,
+    workspaceRoot   => $CWD,
+    permissionMode  => 'default',
+    permission_mode => 'default',
+    timestamp       => '2026-10-26T10:00:00Z',
+);
+
+# Grok CLI names the event in its own words in hookEventName and
+# GROK_HOOK_EVENT, and as Claude Code does in hook_event_name.
+sub grok_input {
+    my ($hook, $fields) = @_;
+    (my $own = $hook) =~ s/(?<=[a-z])(?=[A-Z])/_/g;
+    return ({ %GROK_INPUT, hookEventName => lc $own, hook_event_name => $hook, %{ $fields || {} } }, lc $own);
+}
+
+sub grok {
+    my ($hook, $fields, %opt) = @_;
+    my ($input, $own) = grok_input($hook, $fields);
+    return hook_event(
+        agent => 'grok',
+        hook  => $hook,
+        input => $input,
+        env   => { %PANE, GROK_HOOK_EVENT => $own },
+        %opt{qw(name)},
+    );
+}
+
+my @grok_cases = (
+    ['SessionStart', { source => 'startup' }, { event => 'session_start', source => 'startup' }],
+    [
+        'UserPromptSubmit',
+        { prompt => "Write a function\nto parse CSV files", promptId => 'p1' },
+        { event => 'prompt_submit', query => 'Write a function to parse CSV files' },
+    ],
+    [
+        'PostToolUse',
+        {
+            toolName      => 'run_terminal_command',
+            tool_name     => 'run_terminal_command',
+            toolInput     => { command => 'npm test' },
+            tool_input    => { command => 'npm test' },
+            toolResult    => 'all passed',
+            tool_response => 'all passed',
+        },
+        { event => 'tool_complete', tool_name => 'run_terminal_command', tool_input => '{"command":"npm test"}' },
+    ],
+    [
+        'PostToolUseFailure',
+        { tool_name => 'run_terminal_command', tool_input => { command => 'npm test' } },
+        { event => 'tool_complete', tool_name => 'run_terminal_command', tool_input => '{"command":"npm test"}' },
+    ],
+    [
+        'Notification',
+        { notificationType => 'permission_prompt', message => 'Grok wants to run npm test', title => 'Permission' },
+        { event => 'permission_request', summary => 'Grok wants to run npm test' },
+    ],
+    [
+        'Notification',
+        { notificationType => 'idle_prompt', message => 'Waiting for you' },
+        { event => 'idle_prompt', summary => 'Waiting for you' },
+    ],
+    [
+        'Stop',
+        { reason => 'end_turn', stopHookActive => JSON::PP::false, lastAssistantMessage => "Done.\n\nThe tests pass." },
+        { event => 'stop', response => 'Done. The tests pass.' },
+    ],
+    # An older Grok CLI that gives no reason.
+    ['Stop', { stopHookActive => JSON::PP::false }, { event => 'stop' }],
+    [
+        'StopFailure',
+        { error => 'rate_limit', lastAssistantMessage => 'Rate limit reached' },
+        { event => 'stop_failure', error_type => 'rate_limit', error_message => 'Rate limit reached' },
+    ],
+    [
+        'StopFailure',
+        { error => 'server_error', errorDetails => '503 from the API' },
+        { event => 'stop_failure', error_type => 'server_error', error_message => '503 from the API' },
+    ],
+    [
+        'StopCancelled',
+        { reason => 'user_interrupt', cancelledBy => 'user' },
+        { event => 'stop', interrupted => JSON::PP::true },
+    ],
+    [
+        'StopCancelled',
+        { reason => 'max_turns', cancelledBy => 'system', lastAssistantMessage => 'Out of turns' },
+        { event => 'stop_failure', error_type => 'max_turns', error_message => 'Out of turns' },
+    ],
+);
+
+for my $case (@grok_cases) {
+    my ($hook, $input, $expected) = @$case;
+    my $name = join(' ', 'grok', $hook, grep { defined } @$input{qw(reason notificationType error)});
+    my $event = grok($hook, $input, name => $name);
+    is_deeply($event, { common('grok', 'grk-3'), pane => 'pane-42', %$expected }, "$name: event, with its pane")
+      or diag(explain($event));
+}
+
+{
+    # A subagent's work, which may go on after the turn ended, is told as a
+    # subagent's. Grok CLI names only its kind.
+    my $sub = grok('PostToolUse',
+        { tool_name => 'read_file', tool_input => { path => 'a.rs' }, subagentType => 'explore' },
+        name => 'grok subagent tool');
+    is($sub->{subagent}, JSON::PP::true, 'grok subagent tool: subagent is true');
+    ok(!exists $sub->{subagent_id}, 'grok subagent tool: no subagent id, which Grok CLI does not give');
+
+    for my $case (
+        ['Stop', { reason => 'session_end' }, 'the Stop as the session closes'],
+        ['PreToolUse', { tool_name => 'run_terminal_command' }, 'PreToolUse'],
+        ['SessionEnd', { reason => 'exit' }, 'SessionEnd'],
+        ['Notification', { notificationType => 'task_complete', message => 'done' }, 'a task_complete notification'],
+        ['PermissionDenied', { tool_name => 'run_terminal_command' }, 'PermissionDenied'],
+    ) {
+        my ($hook, $input, $what) = @$case;
+        is(grok($hook, $input, name => "grok $what"), undef, "grok $what: nothing sent");
+    }
+
+    # Claude Code's plugin, when Grok CLI runs its hooks, neither tells nor
+    # asks: Grok CLI's own plugin reports for it.
+    for my $hook (qw(SessionStart Stop)) {
+        my ($input, $own) = grok_input($hook, { reason => 'end_turn', source => 'startup' });
+        my $run = run_hook(agent => 'claude', hook => $hook, input => $input,
+            env => { %PANE, GROK_HOOK_EVENT => $own }, answer => answers(0));
+        is(event_of($run, "claude $hook run by Grok CLI"), undef, "claude $hook run by Grok CLI: nothing sent");
+        is_deeply($run->{requests}, [], "claude $hook run by Grok CLI: no briefing request");
+    }
+
+    # Grok CLI ignores what a session start's hook prints, so the hook does
+    # not ask for a briefing it could not hand over.
+    my ($input, $own) = grok_input('SessionStart', { source => 'startup' });
+    my $run = run_hook(agent => 'grok', hook => 'SessionStart', input => $input,
+        env => { %PANE, GROK_HOOK_EVENT => $own }, answer => answers(0));
+    is(event_of($run, 'grok SessionStart with Flash Console answering')->{event}, 'session_start',
+        'grok session start: the status event is sent');
+    is_deeply($run->{requests}, [], 'grok session start: no briefing request');
+    my $perl = run_hook(command => ['perl', $HOOK_PL, 'grok', 'SessionStart'], input => $input, env => \%PANE,
+        answer => answers(0));
+    is($perl->{stdout}, '', 'grok session start, Perl on its own: nothing on stdout');
+    is_deeply($perl->{requests}, [], 'grok session start, Perl on its own: no briefing request');
 }
 
 # ---------------------------------------------------------------------------
