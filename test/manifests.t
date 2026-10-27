@@ -257,6 +257,8 @@ my %HOOKS = (
             PermissionRequest  => [[undef, 'PermissionRequest'], [undef, 'ask-permission', 1]],
             Elicitation        => [[undef, 'ask-elicitation', 1]],
             Notification => [['permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog', 'Notification']],
+            SubagentStart      => [[undef, 'SubagentStart']],
+            SubagentStop       => [[undef, 'SubagentStop']],
             Stop               => [[undef, 'Stop']],
             StopFailure        => [[undef, 'StopFailure']],
         },

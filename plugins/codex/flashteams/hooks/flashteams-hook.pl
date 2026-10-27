@@ -286,10 +286,14 @@ sub claude_event {
         return unless $kind{$type};
         return { event => $kind{$type}, summary => $in->excerpt('message') };
     }
+    if ($hook eq 'SubagentStart' || $hook eq 'SubagentStop') {
+        return { event => $hook eq 'SubagentStart' ? 'subagent_start' : 'subagent_stop',
+            active_subagents => active_subagents($in) };
+    }
     if ($hook eq 'Stop') {
         # Sent even when stop_hook_active is true: this is still the real
         # end of the turn as far as the person is concerned.
-        return { event => 'stop', response => $in->excerpt('last_assistant_message') };
+        return { event => 'stop', response => $in->excerpt('last_assistant_message'), active_subagents => active_subagents($in) };
     }
     if ($hook eq 'StopFailure') {
         return {
@@ -299,6 +303,25 @@ sub claude_event {
         };
     }
     return;
+}
+
+# Only worker identities leave the hook, never descriptions or commands.
+sub active_subagents {
+    my ($in) = @_;
+    my $tasks = $in->decoded('background_tasks');
+    return undef unless ref($tasks) eq 'ARRAY';
+    my (@ids, %seen);
+    for my $task (@$tasks) {
+        return undef unless ref($task) eq 'HASH';
+        next unless ($task->{type} // '') eq 'subagent';
+        next if ($task->{status} // '') =~ /\A(?:completed|failed|cancelled|stopped|killed|done)\z/;
+        return undef unless is_string($task->{id});
+        my $id = clean($task->{id}, ID_LIMIT);
+        return undef unless defined $id;
+        push @ids, $id unless $seen{$id}++;
+        return undef if @ids > 128;
+    }
+    return \@ids;
 }
 
 sub codex_event {

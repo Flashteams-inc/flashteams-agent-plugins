@@ -52,7 +52,7 @@ my $VERSION = do {
 my %ALLOWED = map { $_ => 1 } qw(
   v agent event session_id cwd pane project source query response summary
   tool_name tool_input plugin_version error_type error_message subagent
-  subagent_id interrupted plan plan_step
+  subagent_id active_subagents interrupted plan plan_step
 );
 
 # Characters no field may carry: control characters, line and paragraph
@@ -509,8 +509,6 @@ is(claude('Notification', { notification_type => 'auth_success', message => 'Sig
 is(claude('PreToolUse', { tool_name => 'Bash', tool_input => { command => 'ls' } }, name => 'claude PreToolUse Bash'),
     undef, 'claude PreToolUse for other tools: nothing sent');
 
-is(claude('SubagentStop', { agent_id => 'a1', agent_type => 'Explore' }, name => 'claude SubagentStop'),
-    undef, 'claude hooks the plugin does not use: nothing sent');
 
 {
     my $event = claude('Stop', { stop_hook_active => JSON::PP::true, last_assistant_message => 'Finished.' },
@@ -541,6 +539,26 @@ is(claude('SubagentStop', { agent_id => 'a1', agent_type => 'Explore' }, name =>
         name => 'claude PermissionRequest without a description'
     );
     is($event->{summary}, '/tmp/x.txt', 'claude permission summary falls back to the file');
+}
+
+{
+    for my $hook ('SubagentStart', 'SubagentStop') {
+        my $event = claude($hook, { agent_id => 'worker-a', agent_type => 'Explore' }, name => "claude $hook worker");
+        is($event->{event}, $hook eq 'SubagentStart' ? 'subagent_start' : 'subagent_stop', "$hook lifecycle");
+        is($event->{subagent_id}, 'worker-a', "$hook names the worker");
+    }
+    my $event = claude('Stop', { background_tasks => [
+        { id => 'worker-a', type => 'subagent', status => 'running', description => 'private words' },
+        { id => 'worker-a', type => 'subagent', status => 'running' },
+        { id => 'shell-a', type => 'shell', status => 'running' },
+        { id => 'worker-b', type => 'subagent', status => 'completed' },
+    ] }, name => 'claude Stop with background work');
+    is_deeply($event->{active_subagents}, ['worker-a'], 'only active unique worker identities are sent');
+    ok(!exists $event->{background_tasks}, 'task details stay local');
+    $event = claude('Stop', { background_tasks => [] }, name => 'claude Stop no workers');
+    is_deeply($event->{active_subagents}, [], 'an empty snapshot is retained');
+    $event = claude('Stop', { background_tasks => [{type => 'subagent', id => 123}] }, name => 'claude malformed workers');
+    ok(!exists $event->{active_subagents}, 'a malformed snapshot cannot clear workers');
 }
 
 {

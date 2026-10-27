@@ -131,6 +131,28 @@
           }
         ]
       }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude SubagentStart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(exit 0); sh -c '{ set +eux; } 2>/dev/null; f=$1; shift; [ -r \"$f\" ] || exit 0; sh \"$f\" \"$@\" >/dev/null 2>&1; exit 0' sh \"${CLAUDE_PLUGIN_ROOT}/hooks/flashteams-hook.sh\" claude SubagentStop",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

@@ -485,6 +485,7 @@ Only `event` is required. Fields with nothing to say are left out.
 | `error_type` | Why a turn failed, such as `rate_limit`. |
 | `error_message` | Excerpt of the error text. |
 | `subagent` | `true` when the hook fired for a subagent's tool or turn. |
+| `active_subagents` | Optional complete list of active worker IDs in the parent conversation. An empty list clears workers; absent means unknown. Derived from Claude Stop/SubagentStop background tasks, with descriptions and commands left out. |
 | `subagent_id` | The subagent's own id, when the agent's hook input names one: `agent_id`, which Claude Code and Codex send only for a hook that fires inside a subagent. Never sent for the main agent. |
 | `interrupted` | `true` when the person interrupted the turn. |
 | `plan` | The agent's whole to-do list, on `tool_complete` of a tool that writes or lists it: a list of steps, each `{"text": ..., "status": ...}` with `"id"` when the agent gives its steps ids. `status` is `pending`, `in_progress` or `completed`; any other is sent as `pending`. Empty when the agent cleared its list. At most 50 steps. |
@@ -522,6 +523,8 @@ event then carries the plan in place of the `tool_input` excerpt:
 | :- | :- | :- |
 | `session_start` | `SessionStart`, with `source` | `SessionStart`, with `source` |
 | `prompt_submit` | `UserPromptSubmit` | `UserPromptSubmit` |
+| `subagent_start` | `SubagentStart`, naming the worker | |
+| `subagent_stop` | `SubagentStop`, naming the worker | |
 | `tool_complete` | `PostToolUse`, `PostToolUseFailure` | `PostToolUse` |
 | `permission_request` | `PermissionRequest`; `Notification` of type `permission_prompt` | `PermissionRequest` |
 | `question_asked` | `PreToolUse` and `PermissionRequest` for `AskUserQuestion`; `Notification` of type `elicitation_dialog` or `elicitation_url_dialog` | `PreToolUse` for `request_user_input` |
@@ -996,3 +999,7 @@ dashes.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Worker status compatibility
+
+Claude worker lifecycle hooks let Flash Console keep Working visible after the parent finishes responding and wait for the final worker before showing Done. Older consoles ignore the new event names and optional snapshot field. The matching console update is required to display worker activity; existing Claude sessions must restart after updating the plugin to load its new hooks. The Perl hook and the native Windows hook send the same worker IDs, with no task descriptions or command text in the snapshot.
