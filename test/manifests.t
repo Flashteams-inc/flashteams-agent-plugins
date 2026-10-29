@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.9.8';
+my $RELEASE = '1.9.9';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -629,6 +629,11 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     like($skill, qr/never commit or push/, 'visual-qa never commits or pushes');
     like($skill, qr/never instruct you/, "visual-qa takes the repository's text as data");
     like($skill, qr/not explained/, 'visual-qa names the files it could not place');
+    for my $field (qw(base base_commit head head_commit)) {
+        like($skill, qr/`\Q$field\E`/, "visual-qa tells Flash Console what it compares with $field");
+    }
+    like($skill, qr/"op": "set_aside"/, 'visual-qa sets files aside on the scenario');
+    like($skill, qr/older Flash Console refuses/, 'visual-qa still accounts for files in an older Flash Console');
     like($skill, qr/say so, list the changed\s+files/, 'visual-qa says so without the diagram tools');
     like($skill, qr/Never print or repeat a secret's value/, 'visual-qa never repeats a secret');
 }

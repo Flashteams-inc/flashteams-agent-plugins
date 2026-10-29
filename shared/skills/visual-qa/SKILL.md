@@ -11,7 +11,11 @@ branch left its base, and a scenario is the code as the branch leaves it.
 Diagrams marks what the scenario adds, changes and removes, and shows the
 review you write for each change. The person reads it in the side panel,
 puts Current and the branch side by side with Compare, ticks off the
-checks, marks each change reviewed and copies the QA checklist.
+checks, marks each change reviewed and copies the QA checklist. Flash
+Console reads git itself for which files the change touches: it shows each
+part's real diff in its review, counts the files the drawing explains, sets
+aside and leaves unexplained, and marks each file's card in Code review the
+same way.
 
 Rules for the whole review:
 
@@ -79,8 +83,10 @@ files with what each change does in words, and stop.
    how it runs. Then `diagram__read_diagram` for the diagram's id and its
    links' ids, which the scenario names.
 6. **Draw the change as a scenario.** `diagram__add_scenario` on that
-   diagram, `name` the branch or `PR <n>`, and `changes` in the order the
-   code runs:
+   diagram, `name` the branch or `PR <n>`, `compared` saying what it is
+   (`base` the base branch, `base_commit` BASE, `head` the branch, `PR <n>`
+   or `Work in progress`, and `head_commit` the head commit, left out for
+   work in progress), and `changes` in the order the code runs:
    - `add_box`, `remove_box`, `rename`, `describe`, `set_code`, `connect`,
      `disconnect` and `rewire`. The same thing keeps its id, renamed if it
      must be; a replacement is a removal and an addition; a link whose ends
@@ -97,15 +103,24 @@ files with what each change does in words, and stop.
    `notes`: two or three sentences on what the change does, then a line
    that accounts for the files (step 7).
 7. **Account for every changed file.** Each is the file of a part the
-   scenario adds, changes or removes, or named in a review, or set aside
-   with its reason: tests, docs, generated files, lock files, formatting.
-   End `notes` with a line such as "15 files changed: 8 drawn, 6 set aside
-   (tests, docs), 1 not explained: src/sync.rs". A file you could not place
-   is not explained; never leave one out quietly.
+   scenario adds, changes or removes, or named in a review by its path
+   from the repository's top, or set aside with its reason: tests, docs,
+   generated files, lock files, formatting. The answer to `add_scenario`
+   says how many files are explained and names those that are not. Set
+   the rest aside in one `diagram__edit_diagram` call on the scenario, a
+   change `{"op": "set_aside", "file": "<path>", "why": "tests"}` for each
+   file; an older Flash Console refuses `compared` and `set_aside`, and
+   then `notes` alone accounts for them. End `notes` with a line such as
+   "15 files changed: 8 drawn, 6 set aside (tests, docs), 1 not explained:
+   src/sync.rs". A file you could not place is not explained; never leave
+   one out quietly.
 8. **Check it.** `diagram__read_diagram` again: every change has a review
-   with its checks, and every part with code has its file. Mend Current or
-   the scenario with `diagram__edit_diagram` (`scenario` names it).
+   with its checks, every part with code has its file, and the scenario's
+   `files` line names nothing not explained that you could place. Mend
+   Current or the scenario with `diagram__edit_diagram` (`scenario` names
+   it).
 9. **Reply** in three to six lines: what the drawing shows, the riskiest
    change and why, how many parts and links changed, the files not
    explained, and that it is open in the side panel's Architecture tab,
-   where Compare puts Current and the branch side by side.
+   where Compare puts Current and the branch side by side, and Code review
+   marks each file with the parts that explain it.

@@ -205,6 +205,15 @@ only: it changes no code and never commits. It needs Flash Console's own
 MCP server, `flash-console`, whose `diagram__` tools draw the diagram;
 without it the agent says so and lists the changes in words.
 
+From 1.9.9 the skill tells Flash Console what the scenario compares
+(`compared` on `add_scenario`: the base branch and its commit, the branch
+and its commit) and sets files aside on the scenario itself. Flash Console
+then reads git for the changed files, shows each part's real diff in its
+review, counts what the drawing explains in a row over it, and marks the
+cards in Code review, whose Visual QA button starts the skill too. Such a
+scenario offers no Build this change or Merge into Current: its code is
+written already.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
