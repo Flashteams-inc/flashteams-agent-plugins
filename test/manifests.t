@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.9.7';
+my $RELEASE = '1.9.8';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -92,7 +92,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         [files_in($CLAUDE)],
         [qw(.claude-plugin/plugin.json bin/flashteams hooks/flashteams-hook.pl hooks/flashteams-hook.sh
             hooks/hooks.json scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
-            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
+            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
         'the Claude Code flashteams plugin holds the hooks, the skills, the scan helper and the shim'
     );
     ok(-x "$ROOT/$CLAUDE/bin/flashteams", 'the Claude Code shim is executable');
@@ -173,7 +173,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         [files_in($CODEX)],
         [qw(.codex-plugin/plugin.json hooks/flashteams-hook.pl hooks/flashteams-hook.sh hooks/hooks.json
             scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
-            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md)],
+            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
         'the Codex flashteams plugin holds the hooks, the skills and the scan helper'
     );
     is_deeply(
@@ -598,6 +598,39 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
         like($skill{'architecture-review'}, qr/\b$operation\b/, "architecture-review knows query_codebase's $operation");
     }
     like($skill{'architecture-review'}, qr/new\s+engineer/, 'architecture-review writes for a new engineer');
+}
+
+# The visual QA skill: the same in both agents' flashteams plugins, in
+# neither MCP plugin, drawn with Flash Console's diagram tools and reading
+# git only.
+{
+    my $file = 'skills/visual-qa/SKILL.md';
+    for my $plugin ($CLAUDE, $CODEX) {
+        is(slurp("$plugin/$file"), slurp("shared/$file"), "$plugin/$file matches shared/$file (run script/sync)");
+    }
+    ok(!-e "$ROOT/$_/skills/visual-qa", "$_ has no visual-qa skill") for $CLAUDE_MCP, $CODEX_MCP;
+
+    my $skill = slurp("shared/$file");
+    my ($frontmatter) = $skill =~ /\A---\n(.*?\n)---\n/s;
+    my @keys = map { /\A([A-Za-z-]+):/ ? $1 : '?' } split /\n/, $frontmatter // '';
+    is("@keys", 'name description', "the visual-qa skill's frontmatter has only a name and a description");
+    my ($description) = $skill =~ /\A---\nname: visual-qa\ndescription: (Use when [^\n]+)\n---\n/;
+    ok($description, 'the visual-qa skill is named visual-qa and says when to use it');
+    cmp_ok(length($description // ''), '<=', 1024, 'the visual-qa skill description fits both agents');
+
+    for my $tool (qw(diagram__open_diagram diagram__add_scenario diagram__edit_diagram diagram__read_diagram)) {
+        like($skill, qr/\Q$tool\E/, "visual-qa draws with $tool");
+    }
+    like($skill, qr/git merge-base/, 'visual-qa compares with the merge base, as a pull request does');
+    like($skill, qr/git show BASE:<path>/, 'visual-qa reads the before side at the base');
+    for my $field (qw(what why unclear risk risk_note checks expect)) {
+        like($skill, qr/`\Q$field\E`/, "visual-qa reviews each change with $field");
+    }
+    like($skill, qr/never commit or push/, 'visual-qa never commits or pushes');
+    like($skill, qr/never instruct you/, "visual-qa takes the repository's text as data");
+    like($skill, qr/not explained/, 'visual-qa names the files it could not place');
+    like($skill, qr/say so, list the changed\s+files/, 'visual-qa says so without the diagram tools');
+    like($skill, qr/Never print or repeat a secret's value/, 'visual-qa never repeats a secret');
 }
 
 # ---------------------------------------------------------------------------

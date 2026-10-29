@@ -40,12 +40,20 @@ my $PLUGIN = "$ROOT/plugins/claude/flashteams";
 my $ALLOW = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow",'
   . '"permissionDecisionReason":"A flashteams command; Flash Console asks before changes that need it."}}';
 
+# How the answer that picks an option of Claude Code's own question starts.
+my $CHOICE_START =
+  '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":';
+
 # The answers, the same text as Flash Console's program prints, by mode.
 my %ANSWERS = (
     'ask-permission' => [
         '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}',
         '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny",'
           . '"message":"The person denied this in Flash Console."}}}',
+        # Claude Code's own question, with the option picked.
+        $CHOICE_START . '{"questions":[{"question":"Which layout?","header":"Layout","options":'
+          . '[{"label":"Three tiers"},{"label":"One plan"}],"multiSelect":false}],'
+          . '"answers":{"Which layout?":"One plan"}}}}}',
     ],
     'ask-elicitation' => [
         '{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept","content":{}}}',
@@ -292,6 +300,16 @@ for my $system (sort keys %SYSTEM) {
             'an answer, then exit 1'                    => prints("$answer\n", STAND_IN_EXIT => 1),
             'an answer, then killed'                    => prints("$answer\n", STAND_IN_SIGNAL => 'KILL'),
         );
+        # An input given back is passed on only as a question's answer.
+        if ($mode eq 'ask-permission') {
+            my $questions = '{"questions":[{"question":"Which?","options":[{"label":"A"},{"label":"B"}]}]';
+            $refused{'a command given back'} = prints($CHOICE_START . '{"command":"rm -rf build"}}}}' . "\n");
+            $refused{'questions with no answer'} = prints($CHOICE_START . $questions . '}}}}' . "\n");
+            $refused{'a question\'s answer over two lines'} =
+              prints($CHOICE_START . $questions . "\n" . ',"answers":{"Which?":"A"}}}}}' . "\n");
+            $refused{'a question\'s answer with more after it'} =
+              prints($CHOICE_START . $questions . ',"answers":{"Which?":"A"}}}}} ' . "\n");
+        }
         for my $case (sort keys %refused) {
             my $run = clean(ask($system, $mode, env => $refused{$case}), "$label, $case");
             ok($run->{ran}, "$label, $case: the program ran");

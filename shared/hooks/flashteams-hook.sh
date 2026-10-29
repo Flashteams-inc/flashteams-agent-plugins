@@ -52,6 +52,12 @@ allow='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":
 # Claude Code to ask as usual.
 ask_allow='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}'
 ask_deny='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"The person denied this in Flash Console."}}}'
+# For Claude Code's own question, the option the person picked: the tool
+# allowed with its input given back on one line, its questions first and
+# the answer last, as only that answer is written. Flash Console's program
+# prints it only for the question tool.
+ask_choice='{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"questions":['
+ask_choice_end=',"answers":{'
 ask_accept='{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"accept","content":{}}}'
 ask_decline='{"hookSpecificOutput":{"hookEventName":"Elicitation","action":"decline"}}'
 
@@ -94,9 +100,12 @@ hand_over() {
     ;;
   ask-permission)
     answer=$("$program" --hook "$@") || exit 0
-    if [ "$answer" = "$ask_allow" ] || [ "$answer" = "$ask_deny" ]; then
-      printf '%s\n' "$answer"
-    fi
+    case $answer in
+    *'
+'*) ;;
+    "$ask_allow" | "$ask_deny") printf '%s\n' "$answer" ;;
+    "$ask_choice"*"$ask_choice_end"*'"}}}}}') printf '%s\n' "$answer" ;;
+    esac
     ;;
   ask-elicitation)
     answer=$("$program" --hook "$@") || exit 0

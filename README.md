@@ -181,6 +181,30 @@ full mode only, downloads Trivy's vulnerability database (several hundred
 MB the first time, kept in Trivy's cache or `FLASHTEAMS_TRIVY_CACHE`).
 Trivy runs with its usage data turned off.
 
+## Visual QA
+
+From 1.9.8 the `flashteams` plugin has a `visual-qa` skill, for both
+agents: `/flashteams:visual-qa` in Claude Code, and in Codex ask for a
+visual QA of the branch or name the skill. Flash Console's `/visual-qa`
+starts it in a pane with the agent Settings names for requests.
+
+It draws a change twice in Flash Console's Diagrams: Current is the code
+at the commit the branch left its base, the same one a pull request is
+compared with, and a scenario is the code as the branch leaves it.
+Diagrams marks each part and link the scenario adds, changes or removes,
+and the agent writes a review for each: what changes, why, what it could
+not settle, the risk, and the checks to run, each with what should
+happen. Every changed file is drawn, set aside with a reason (tests,
+docs, generated files) or named as not explained.
+
+What it compares follows the words after the command: nothing for this
+branch against the default branch, a branch or ref, a pull request number
+(with `gh`, or `git fetch origin pull/<n>/head`), or work in progress for
+the uncommitted changes too. Anything else is a focus. The skill reads git
+only: it changes no code and never commits. It needs Flash Console's own
+MCP server, `flash-console`, whose `diagram__` tools draw the diagram;
+without it the agent says so and lists the changes in words.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
@@ -660,7 +684,7 @@ entries in its `hooks.json` wait for the person instead of reporting:
 
 | Mode | Hook | What it asks |
 | :- | :- | :- |
-| `ask-permission` | a second `PermissionRequest` entry | A tool Claude Code wants to use. Claude Code's own `AskUserQuestion` is left to its prompt. |
+| `ask-permission` | a second `PermissionRequest` entry | A tool Claude Code wants to use, and from 1.9.8 Claude Code's own `AskUserQuestion` when it asks one question with two to four answers to pick one from. Several questions, or several answers to one, are left to its prompt. |
 | `ask-elicitation` | `Elicitation` | An MCP server asking to go ahead, a form with no fields to fill in. A form with fields, and a request to open a web page, are left to Claude Code's prompt. |
 
 Each has a timeout of 600 seconds, where every other hook has 5. The
@@ -678,12 +702,17 @@ connection open for the answer:
 ```
 
 `args.kind` is `permission`, with the tool's name as `subject` and its
-command, query, file or address as `detail`, or `confirm`, with the MCP
-server's name as `subject` and its message as `detail`. Flash Console shows
-the card and answers with `{"v":1,"id":...,"ok":true,"data":{"answer":...}}`,
-where the answer is `allow`, `deny` or `terminal`. It answers `terminal`
-when the person chooses Answer in the terminal, when Claude Code goes on
-because the person answered in its own prompt, and after 590 seconds.
+command, query, file or address as `detail`; `confirm`, with the MCP
+server's name as `subject` and its message as `detail`; or `choose`, with
+`AskUserQuestion` as `subject`, the question as `detail` and its answers as
+`options`, each `{"label","description"}`. The program asks `choose` only
+when the plugin is 1.9.8 or later, whose starter passes its answer on.
+Flash Console shows the card and answers with
+`{"v":1,"id":...,"ok":true,"data":{"answer":...}}`, where the answer is
+`allow`, `deny` or `terminal`, or for `choose`, `choice` with the option's
+place from 0 as `data.choice`. It answers `terminal` when the person
+chooses Answer in the terminal, when Claude Code goes on because the person
+answered in its own prompt, and after 590 seconds.
 
 The program then prints one of these four lines, and nothing for
 `terminal`, a refusal, or a Flash Console from before asks:
@@ -695,8 +724,17 @@ The program then prints one of these four lines, and nothing for
 {"hookSpecificOutput":{"hookEventName":"Elicitation","action":"decline"}}
 ```
 
-The starter passes on only one of the two lines for its mode, exactly, and
-only when the program exited 0. With nothing printed, Claude Code's prompt
+For `choose` it prints the tool allowed with its input given back on one
+line, its questions first and the option picked added as `answers`, which
+is how Claude Code takes an answer without its own prompt:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"questions":[...],"answers":{"Which layout?":"One plan"}}}}}
+```
+
+The starter passes on only one of the two lines for its mode, exactly, or
+for `ask-permission` a line that starts as that one does and ends with its
+`answers`, and only when the program exited 0. With nothing printed, Claude Code's prompt
 decides. Claude Code shows its permission prompt while the permission ask
 runs and takes whichever answer comes first, so the card never holds up an
 answer typed in the terminal. It runs the elicitation hook before it shows
@@ -838,6 +876,8 @@ plugins/claude/flashteams/          the Claude Code plugin
   skills/security-audit/            copies of shared/skills/
   skills/sql-audit/
   skills/architecture-review/
+  skills/flash-design/
+  skills/visual-qa/
 plugins/claude/flashteams-mcp/      the optional Claude Code MCP plugin
   .claude-plugin/plugin.json
   .mcp.json                         the FlashTeams MCP server
