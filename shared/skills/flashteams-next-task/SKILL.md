@@ -18,7 +18,11 @@ flashteams, then Authenticate; Codex: `codex mcp login flashteams`) and stop.
 2. **Read the briefing.** Call `load_task` with the task id. Read
    `prior_knowledge` first and never repeat an experiment it marks as
    failed. Only work a task assigned to you, unless the person tells you to
-   take it over.
+   take it over. Pass `session` to `load_task` and to every `update_task`,
+   as to `track_work`: your agent (`claude` or `codex`), your own
+   `session_id` when you know it, the `folder` and the git `branch`, so the
+   task's roadmap feature shows this conversation working on it, when the
+   tools list `session`.
 3. **Start before working.** Call `update_task` with action `start` before
    you change anything, so the time you spend is measured.
 4. **Do the work** the task asks for, and run the project's checks.

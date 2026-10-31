@@ -242,6 +242,14 @@ personal. A task whose project is on a feature is part of it through that
 project. Otherwise their answer lists the features the task might be part
 of, and the agent tags one with `roadmap_tag` only once you confirm it.
 
+From 1.10.2 the `flashteams` skill and the `flashteams-next-task` skill
+pass `session` (the agent, its own session id, the folder and the branch)
+to `load_task` and every `update_task`, as agents already pass it to
+`track_work`. A roadmap feature then shows the conversation working on
+its task, not only a task made with `track_work`: teammates see a
+one-line summary that an agent is on it, and you see which of your chats
+it is, by its name or the start of its session id.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on

@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.10.1';
+my $RELEASE = '1.10.2';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -475,6 +475,8 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
         'the next task skill has its frontmatter');
     like($skill, qr/find_tasks/,   'the next task skill finds the task');
     like($skill, qr/load_task/,    'the next task skill loads the briefing');
+    like($skill, qr/Pass `session` to `load_task` and to every `update_task`,\s+as to `track_work`/,
+        'the next task skill names its conversation to load_task and update_task');
     like($skill, qr/`start`/,      'the next task skill starts the task before working');
     like($skill, qr/actual_hours/, 'the next task skill says how to log time');
 }
@@ -493,6 +495,13 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
     like($skill, qr/flashteams help/,                'the flashteams skill shows a tool\'s arguments');
     like($skill, qr/connect_workspace/,              'the flashteams skill connects the project');
     like($skill, qr/load_task/,                      'the flashteams skill loads the task');
+    like($skill, qr/Pass `--session` to `load_task` and to every `update_task`, the way you\s+pass it to `track_work`/,
+        'the flashteams skill names its conversation to load_task and update_task');
+    like($skill, qr/flashteams load_task --task_id <task id> \\\n\s+--session '\{"agent":"claude","session_id":"<session id>"/,
+        'the flashteams skill shows session passed as JSON');
+    like($skill, qr/never the conversation/,         'the flashteams skill says the conversation stays private');
+    like($skill, qr/Pass it only when `flashteams help` lists `--session` for the tool\./,
+        'the flashteams skill passes session only where the tool takes it');
     like($skill, qr/--action start/,                 'the flashteams skill starts the task before working');
     like($skill, qr/submit_for_review/,              'the flashteams skill submits for review');
     like($skill, qr/--action close/,                 'the flashteams skill closes with a handoff');

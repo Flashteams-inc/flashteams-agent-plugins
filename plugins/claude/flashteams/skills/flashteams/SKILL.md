@@ -73,6 +73,22 @@ in parts, for example as several pieces of evidence.
    language: what you did, what is done and what is left, where to pick
    up, how to check it works, and anything to watch out for.
 
+Pass `--session` to `load_task` and to every `update_task`, the way you
+pass it to `track_work`: your agent (`claude` or `codex`), your own
+`session_id` for this conversation as the briefing gives it (leave it out
+when you do not know it), the `folder` you work in and its git `branch`.
+Pass it only when `flashteams help` lists `--session` for the tool.
+
+```sh
+flashteams load_task --task_id <task id> \
+  --session '{"agent":"claude","session_id":"<session id>","folder":"<folder>","branch":"<branch>"}'
+```
+
+Teammates who can see the roadmap feature the task is part of then see a
+one-line summary that an agent is working on it, never the conversation,
+and the person sees which of their chats it is, by its name or the start
+of its session id.
+
 Never invent hours. Leave `actual_hours` out so the measured time stands.
 Pass it only when that time is wrong, for example when the task sat
 started while nobody worked on it, and then give the real time worked,
