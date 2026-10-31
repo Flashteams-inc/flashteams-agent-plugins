@@ -89,7 +89,9 @@ flashteams design_create --title "Checkout" --index "$(cat space.json)" --files 
    `task_id` when it plans FlashTeams work, the `index` and the first
    artboard in `files`. It starts with the default design system installed
    (its `design_system` names the folder); `design_system: "none"` when the
-   person wants it without. Give the person its `link` at once.
+   person wants it without. Give the person its `link` at once. A space
+   made for a roadmap feature's work is tagged to that feature with
+   `roadmap_tag` (`kind` `design`), as the roadmap skill says.
 4. The rest one at a time, in the order of `order`: write one artboard,
    save it with `design_write`, then the next, so each appears as you go.
    Send `space.json` again only when you add, move or resize artboards or

@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.9.9';
+my $RELEASE = '1.10.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -92,7 +92,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         [files_in($CLAUDE)],
         [qw(.claude-plugin/plugin.json bin/flashteams hooks/flashteams-hook.pl hooks/flashteams-hook.sh
             hooks/hooks.json scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
-            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
+            skills/roadmap/SKILL.md skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
         'the Claude Code flashteams plugin holds the hooks, the skills, the scan helper and the shim'
     );
     ok(-x "$ROOT/$CLAUDE/bin/flashteams", 'the Claude Code shim is executable');
@@ -173,7 +173,7 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         [files_in($CODEX)],
         [qw(.codex-plugin/plugin.json hooks/flashteams-hook.pl hooks/flashteams-hook.sh hooks/hooks.json
             scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
-            skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
+            skills/roadmap/SKILL.md skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
         'the Codex flashteams plugin holds the hooks, the skills and the scan helper'
     );
     is_deeply(
@@ -636,6 +636,53 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     like($skill, qr/older Flash Console refuses/, 'visual-qa still accounts for files in an older Flash Console');
     like($skill, qr/say so, list the changed\s+files/, 'visual-qa says so without the diagram tools');
     like($skill, qr/Never print or repeat a secret's value/, 'visual-qa never repeats a secret');
+}
+
+# The roadmap skill: the same in both agents' flashteams plugins, in neither
+# MCP plugin, with FlashTeams' roadmap tools, changing the Roadmap only as
+# the person asks. The flash-design skill tags a space made for a roadmap
+# feature's work to that feature.
+{
+    my $file = 'skills/roadmap/SKILL.md';
+    my $design = 'skills/flash-design/SKILL.md';
+    for my $plugin ($CLAUDE, $CODEX) {
+        is(slurp("$plugin/$_"), slurp("shared/$_"), "$plugin/$_ matches shared/$_ (run script/sync)") for $file, $design;
+    }
+    ok(!-e "$ROOT/$_/skills/roadmap", "$_ has no roadmap skill") for $CLAUDE_MCP, $CODEX_MCP;
+
+    my $skill = slurp("shared/$file");
+    my ($frontmatter) = $skill =~ /\A---\n(.*?\n)---\n/s;
+    my @keys = map { /\A([A-Za-z-]+):/ ? $1 : '?' } split /\n/, $frontmatter // '';
+    is("@keys", 'name description', "the roadmap skill's frontmatter has only a name and a description");
+    my ($description) = $skill =~ /\A---\nname: roadmap\ndescription: (Use when [^\n]+)\n---\n/;
+    ok($description, 'the roadmap skill is named roadmap and says when to use it');
+    cmp_ok(length($description // ''), '<=', 1024, 'the roadmap skill description fits both agents');
+    for my $when ('add a feature to a FlashTeams roadmap', 'start a roadmap', 'planned or in flight', 'mark a feature shipped',
+        'a design', 'an analysis', 'a diagram', 'a FlashBrain chat', 'a task', 'a project')
+    {
+        like($description // '', qr/\Q$when\E/, "the roadmap skill loads for: $when");
+    }
+
+    for my $tool (qw(roadmap_search roadmap_feature roadmap_candidates roadmap_tag roadmap_create_feature
+        roadmap_update_feature roadmap_create))
+    {
+        like($skill, qr/`\Q$tool\E`/, "the roadmap skill names $tool");
+    }
+    like($skill, qr/Find the feature with `roadmap_search` before you act on one/, 'roadmap: finds the feature first');
+    like($skill, qr/only when the person asks for one/, 'roadmap: adds a feature or a roadmap only when asked');
+    like($skill, qr/unclear, ask once/, 'roadmap: asks once when the roadmap or products are unclear');
+    like($skill, qr/it is unclear which feature[^.]*\s+ask\./, 'roadmap: asks when the feature is unclear');
+    like($skill, qr/right after `design_create`/, 'roadmap: tags a design made for a feature');
+    like($skill, qr/once it is shared to FlashTeams/, 'roadmap: tags an analysis or a diagram once it is shared');
+    like($skill, qr/No tool shares one\s+for you, so ask the person to share it from Flash Console/,
+        'roadmap: the person shares an analysis or a diagram');
+    like($skill, qr/is not a\s+share id/, 'roadmap: tags a share by its share id, not its Library record');
+    like($skill, qr/says it is part of the feature/, 'roadmap: tags a chat, a task or a project when the person says so');
+    like($skill, qr/Mark it shipped only when\s+they say it is done or live/, 'roadmap: marks a feature shipped only when told');
+    like($skill, qr/is for managers, and that they can still tag their own work/, 'roadmap: tells a Builder plainly');
+
+    like(slurp("shared/$design"), qr/`roadmap_tag` \(`kind` `design`\)/,
+        'flash-design: a space made for a roadmap feature is tagged to it');
 }
 
 # ---------------------------------------------------------------------------

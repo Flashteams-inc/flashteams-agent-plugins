@@ -1,8 +1,8 @@
 {
   "name": "flashteams",
   "displayName": "FlashTeams",
-  "version": "1.9.9",
-  "description": "FlashTeams in Claude Code through Flash Console: every FlashTeams tool as the flashteams command, a briefing when a session starts, a skill for using them, security, SQL and architecture audits recorded in FlashTeams, Flash Design spaces to plan UI in, visual QA of a branch drawn before and after in Flash Console's Diagrams, and hooks that tell Flash Console what Claude Code is doing.",
+  "version": "1.10.0",
+  "description": "FlashTeams in Claude Code through Flash Console: every FlashTeams tool as the flashteams command, a briefing when a session starts, a skill for using them, security, SQL and architecture audits recorded in FlashTeams, Flash Design spaces to plan UI in, visual QA of a branch drawn before and after in Flash Console's Diagrams, roadmap features and the designs, analyses and work tagged to them, and hooks that tell Flash Console what Claude Code is doing.",
   "author": {
     "name": "FlashTeams",
     "url": "https://flashteams.ai"

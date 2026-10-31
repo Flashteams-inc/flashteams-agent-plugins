@@ -214,6 +214,27 @@ cards in Code review, whose Visual QA button starts the skill too. Such a
 scenario offers no Build this change or Merge into Current: its code is
 written already.
 
+## Roadmap
+
+From 1.10.0 the `flashteams` plugin has a `roadmap` skill, for both
+agents: `/flashteams:roadmap` in Claude Code, and in Codex ask to add a
+feature to the roadmap or name the skill. It works FlashTeams' Roadmap,
+where a roadmap holds features and each feature is tied to the projects,
+tasks, Flash Design spaces, analyses, diagrams and FlashBrain chats about
+it, through the roadmap tools of the `flashteams` command or the FlashTeams
+MCP tools (`roadmap_search`, `roadmap_feature`, `roadmap_candidates`,
+`roadmap_tag`, `roadmap_create_feature`, `roadmap_update_feature` and
+`roadmap_create`).
+
+The agent finds a feature before acting on one, and adds a feature or
+starts a roadmap only when you ask. It tags a Flash Design space it makes
+for a feature's work to that feature (the `flash-design` skill says so
+too), an analysis or a diagram once you have shared it to FlashTeams from
+Flash Console, which no agent tool does, and a chat, a task or a project
+when you say it is part of the feature. It marks a feature shipped only
+when you say it is done or live. Owners, executives, admins and project
+managers add and change features; Builders tag their own work.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
@@ -887,6 +908,7 @@ plugins/claude/flashteams/          the Claude Code plugin
   skills/architecture-review/
   skills/flash-design/
   skills/visual-qa/
+  skills/roadmap/
 plugins/claude/flashteams-mcp/      the optional Claude Code MCP plugin
   .claude-plugin/plugin.json
   .mcp.json                         the FlashTeams MCP server
