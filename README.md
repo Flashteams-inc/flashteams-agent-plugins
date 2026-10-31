@@ -235,6 +235,13 @@ when you say it is part of the feature. It marks a feature shipped only
 when you say it is done or live. Owners, executives, admins and project
 managers add and change features; Builders tag their own work.
 
+From 1.10.1 the skill says that `track_work` and `create_task` check the
+roadmap for each task they make. A standalone task that clearly belongs to
+a feature is linked to it and becomes visible to the team instead of
+personal. A task whose project is on a feature is part of it through that
+project. Otherwise their answer lists the features the task might be part
+of, and the agent tags one with `roadmap_tag` only once you confirm it.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on

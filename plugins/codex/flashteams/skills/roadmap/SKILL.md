@@ -78,6 +78,16 @@ tools of the same names and arguments. With neither, say so.
 - **A FlashBrain chat, a standalone task or a project:** when the person
   says it is part of the feature. A task inside a project is tagged
   through its project.
+- **A task you make:** `track_work` and `create_task` check the roadmap
+  themselves, and the `roadmap` line in their answer says what they
+  found. When the match is clear they link a standalone task to its
+  feature, and the task then becomes visible to the team instead of
+  personal. They say when a task is part of a feature through its
+  project. Otherwise they list the features it might be part of
+  (`roadmap_features`, with their ids): confirm one with the person, then
+  tag it with `roadmap_tag`, a standalone task as `kind` `task` and a
+  task inside a project through its project. Never tag a feature the
+  person has not confirmed.
 - Take a tag off (`untag`) only when the person asks.
 
 An analysis or a diagram stays in Flash Console's Library on the person's

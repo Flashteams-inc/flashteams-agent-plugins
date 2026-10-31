@@ -1,6 +1,6 @@
 {
   "name": "flashteams",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "description": "FlashTeams in Codex through Flash Console: a briefing when a session starts, a skill for using the flashteams command, security, SQL and architecture audits recorded in FlashTeams, Flash Design spaces to plan UI in, visual QA of a branch drawn before and after in Flash Console's Diagrams, roadmap features and the designs, analyses and work tagged to them, and hooks that tell Flash Console what Codex is doing.",
   "author": {
     "name": "FlashTeams",

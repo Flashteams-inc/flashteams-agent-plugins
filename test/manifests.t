@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.10.0';
+my $RELEASE = '1.10.1';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -641,7 +641,9 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
 # The roadmap skill: the same in both agents' flashteams plugins, in neither
 # MCP plugin, with FlashTeams' roadmap tools, changing the Roadmap only as
 # the person asks. The flash-design skill tags a space made for a roadmap
-# feature's work to that feature.
+# feature's work to that feature. track_work and create_task check the
+# roadmap for the tasks they make, and a feature they suggest is tagged
+# only once the person confirms it.
 {
     my $file = 'skills/roadmap/SKILL.md';
     my $design = 'skills/flash-design/SKILL.md';
@@ -678,6 +680,13 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
         'roadmap: the person shares an analysis or a diagram');
     like($skill, qr/is not a\s+share id/, 'roadmap: tags a share by its share id, not its Library record');
     like($skill, qr/says it is part of the feature/, 'roadmap: tags a chat, a task or a project when the person says so');
+    like($skill, qr/`track_work`\s+and\s+`create_task`\s+check\s+the\s+roadmap\s+themselves/,
+        'roadmap: track_work and create_task check the roadmap for the tasks they make');
+    like($skill, qr/link\s+a\s+standalone\s+task\s+to\s+its\s+feature/, 'roadmap: a clear match links a standalone task');
+    like($skill, qr/visible\s+to\s+the\s+team\s+instead\s+of\s+personal/, 'roadmap: a linked personal task is visible to the team');
+    like($skill, qr/part\s+of\s+a\s+feature\s+through\s+its\s+project/, 'roadmap: a task is part of a feature through its project');
+    like($skill, qr/confirm\s+one\s+with\s+the\s+person,\s+then\s+tag\s+it\s+with\s+`roadmap_tag`/,
+        'roadmap: a suggested feature is confirmed with the person before it is tagged');
     like($skill, qr/Mark it shipped only when\s+they say it is done or live/, 'roadmap: marks a feature shipped only when told');
     like($skill, qr/is for managers, and that they can still tag their own work/, 'roadmap: tells a Builder plainly');
 
