@@ -1,6 +1,6 @@
 ---
 name: roadmap
-description: Use when the person wants to add a feature to a FlashTeams roadmap or start a roadmap, see what is planned or in flight on the roadmap, tag a design, an analysis, a diagram, a FlashBrain chat, a task or a project to a roadmap feature, or mark a feature shipped. Finds, reads and changes the features on FlashTeams' product Roadmap, each tied to the work, designs, analyses, diagrams and chats about it.
+description: Use when the person wants to add a feature to a FlashTeams roadmap or start a roadmap, see what is planned or in flight on the roadmap, tag a design, an analysis, a diagram, a FlashBrain chat, a task or a project to a roadmap feature, mark a feature shipped, or read or leave the lessons on a feature (what failed or worked there). Finds, reads and changes the features on FlashTeams' product Roadmap, each tied to the work, designs, analyses, diagrams and chats about it, and the lessons the chats on it left.
 ---
 
 # Roadmap
@@ -46,6 +46,10 @@ tools of the same names and arguments. With neither, say so.
   (`roadmap_id`, null takes it out) or products.
 - `roadmap_create`: a new roadmap: its `name`, `department_id`,
   `product_ids`, description and owner.
+- `roadmap_lessons`: a feature's lessons, what failed, what worked and
+  what is good to know: `action` `list` (`feature_id`, or `task_id` for
+  the feature a task is part of), `add` (`kind` `failed`, `worked` or
+  `tip`, `text`, and `session`) or `remove` (`lesson_id`).
 
 ## Features
 
@@ -117,6 +121,27 @@ with Share beside its title on its Analysis tab, or either one with Share
 in its menu in the Library, where they choose who can open it. Then find
 it with `roadmap_candidates`. A share keeps its id as new versions are
 saved, so tag it once.
+
+## Lessons
+
+Each chat on a feature leaves what it learned there, so the next chat on
+it, anyone's, starts from it.
+
+- `load_task` and `track_work --action start` bring the lessons of the
+  feature a task is part of, in `lessons`. Read them before you plan, and
+  never repeat what they say did not work.
+- As you go, when something fails or works that the next chat should
+  know, record it with `roadmap_lessons --action add` (`--kind failed`,
+  `worked` or `tip`, `--text` in plain words, `--task_id`, `--session`).
+  Or pass up to five as `--lessons` when you finish with `update_task`
+  (`submit_for_review` or `close`) or `track_work --action finish`, such
+  as `--lessons '[{"kind":"failed","text":"..."}]'`. When a task is part
+  of several features, the answer names them: ask the person which.
+- `track_work --action status` says in `lessons_reach` how far the
+  person's agents read: `feature`, `roadmap` (the default) or
+  `codebase`. Set it only when the person asks, with `track_work --action
+  set_preference --lessons_reach <choice>`.
+- Remove a lesson only when the person asks.
 
 ## When it says no
 

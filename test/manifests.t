@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.10.3';
+my $RELEASE = '1.11.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -508,6 +508,10 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
     like($skill, qr/With `per_roadmap`, one task covers\s+their work on a roadmap/,
         'the flashteams skill keeps one task per roadmap when the person chose that');
     like($skill, qr/The person changes this\s+by asking/, 'the flashteams skill changes roadmap_tasks only when asked');
+    like($skill, qr/For a task on a roadmap feature, read\s+its `lessons` too and never repeat what they say did not work/,
+        'the flashteams skill reads a roadmap task\'s lessons before it plans');
+    like($skill, qr/record\s+what failed or worked with `roadmap_lessons --action add` as you go,\s+or `--lessons` when you finish/,
+        'the flashteams skill leaves what failed or worked');
     like($skill, qr/--action start/,                 'the flashteams skill starts the task before working');
     like($skill, qr/submit_for_review/,              'the flashteams skill submits for review');
     like($skill, qr/--action close/,                 'the flashteams skill closes with a handoff');
@@ -675,13 +679,13 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     ok($description, 'the roadmap skill is named roadmap and says when to use it');
     cmp_ok(length($description // ''), '<=', 1024, 'the roadmap skill description fits both agents');
     for my $when ('add a feature to a FlashTeams roadmap', 'start a roadmap', 'planned or in flight', 'mark a feature shipped',
-        'a design', 'an analysis', 'a diagram', 'a FlashBrain chat', 'a task', 'a project')
+        'a design', 'an analysis', 'a diagram', 'a FlashBrain chat', 'a task', 'a project', 'the lessons on a feature')
     {
         like($description // '', qr/\Q$when\E/, "the roadmap skill loads for: $when");
     }
 
     for my $tool (qw(roadmap_search roadmap_feature roadmap_candidates roadmap_tag roadmap_create_feature
-        roadmap_update_feature roadmap_create))
+        roadmap_update_feature roadmap_create roadmap_lessons))
     {
         like($skill, qr/`\Q$tool\E`/, "the roadmap skill names $tool");
     }
@@ -712,6 +716,17 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     like($skill, qr/`--new_task true` only when the person\s+wants a new task/, 'roadmap: a new task with one task per roadmap only when wanted');
     like($skill, qr/The person changes this by asking you to; only then\s+call `track_work --action set_preference --roadmap_tasks/,
         'roadmap: changes roadmap_tasks only when the person asks');
+    like($skill, qr/- `roadmap_lessons`: a feature's lessons/, 'roadmap: lists roadmap_lessons among its tools');
+    like($skill, qr/^## Lessons$/m, 'roadmap: has a Lessons section');
+    like($skill, qr/`load_task` and `track_work --action start` bring the lessons/, 'roadmap: lessons come with load_task and track_work start');
+    like($skill, qr/Read them before you plan, and\s+never repeat what they say did not work/, 'roadmap: reads lessons before planning');
+    like($skill, qr/record it with `roadmap_lessons --action add`/, 'roadmap: records what failed or worked as it goes');
+    like($skill, qr/pass up to five as `--lessons` when you finish/, 'roadmap: or passes lessons when it finishes');
+    like($skill, qr/When a task is part\s+of several features, the answer names them: ask the person which/,
+        'roadmap: asks which feature when a task is on several');
+    like($skill, qr/Set it only when the person asks, with `track_work --action\s+set_preference --lessons_reach/,
+        'roadmap: changes lessons_reach only when the person asks');
+    like($skill, qr/Remove a lesson only when the person asks/, 'roadmap: removes a lesson only when asked');
     like($skill, qr/is for managers, and that they can still tag their own work/, 'roadmap: tells a Builder plainly');
 
     like(slurp("shared/$design"), qr/`roadmap_tag` \(`kind` `design`\)/,

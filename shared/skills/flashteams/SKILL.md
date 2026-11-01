@@ -59,7 +59,10 @@ in parts, for example as several pieces of evidence.
 
 1. `connect_workspace` to the project, then `load_project`.
 2. `load_task`, and read `prior_knowledge` first. Never repeat an
-   experiment it marks as failed. Only work a task assigned to you, unless
+   experiment it marks as failed. For a task on a roadmap feature, read
+   its `lessons` too and never repeat what they say did not work; record
+   what failed or worked with `roadmap_lessons --action add` as you go,
+   or `--lessons` when you finish. Only work a task assigned to you, unless
    the person tells you to take it over. `load_task` finds only tasks in
    the connected project: for the task chosen in Flash Console, connect to
    the project the briefing names, and if it names none, ask the person

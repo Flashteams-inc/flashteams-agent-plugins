@@ -223,8 +223,8 @@ where a roadmap holds features and each feature is tied to the projects,
 tasks, Flash Design spaces, analyses, diagrams and FlashBrain chats about
 it, through the roadmap tools of the `flashteams` command or the FlashTeams
 MCP tools (`roadmap_search`, `roadmap_feature`, `roadmap_candidates`,
-`roadmap_tag`, `roadmap_create_feature`, `roadmap_update_feature` and
-`roadmap_create`).
+`roadmap_tag`, `roadmap_create_feature`, `roadmap_update_feature`,
+`roadmap_create` and `roadmap_lessons`).
 
 The agent finds a feature before acting on one, and adds a feature or
 starts a roadmap only when you ask. It tags a Flash Design space it makes
@@ -258,6 +258,18 @@ features. You can choose one task per roadmap instead: the agent then
 keeps working in your open task for that roadmap, tagged to each feature
 it covers, and makes a new one only if you want it. Ask the agent to
 change it.
+
+From 1.11.0 the `roadmap` skill and the `flashteams` skill keep lessons on
+a roadmap feature: what failed, what worked and what is good to know.
+`load_task` and `track_work` start bring the lessons of a task's feature,
+and the agent reads them before it plans and never repeats what they say
+did not work. It records what it learns with `roadmap_lessons` as it
+goes, or passes them when it finishes the task, so the next chat on the
+feature, yours or a teammate's, starts from them. Everyone who can see
+the feature sees its lessons on its Lessons tab. How far your agents read
+(that feature only, also its roadmap, the default, or every feature on
+the same codebases) is your own setting: `track_work` status reports it
+as `lessons_reach`, and the agent changes it only when you ask.
 
 ## Sandboxes
 
