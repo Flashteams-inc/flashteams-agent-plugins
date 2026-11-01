@@ -27,7 +27,7 @@ my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.10.2';
+my $RELEASE = '1.10.3';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -502,6 +502,12 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
     like($skill, qr/never the conversation/,         'the flashteams skill says the conversation stays private');
     like($skill, qr/Pass it only when `flashteams help` lists `--session` for the tool\./,
         'the flashteams skill passes session only where the tool takes it');
+    like($skill, qr/Work on the product Roadmap gets one task per feature by default/,
+        'the flashteams skill gives each roadmap feature its own task by default');
+    like($skill, qr/never one\s+task tagged to several features/, 'the flashteams skill never shares a task across features');
+    like($skill, qr/With `per_roadmap`, one task covers\s+their work on a roadmap/,
+        'the flashteams skill keeps one task per roadmap when the person chose that');
+    like($skill, qr/The person changes this\s+by asking/, 'the flashteams skill changes roadmap_tasks only when asked');
     like($skill, qr/--action start/,                 'the flashteams skill starts the task before working');
     like($skill, qr/submit_for_review/,              'the flashteams skill submits for review');
     like($skill, qr/--action close/,                 'the flashteams skill closes with a handoff');
@@ -697,6 +703,15 @@ for my $name (qw(security-audit sql-audit architecture-review)) {
     like($skill, qr/confirm\s+one\s+with\s+the\s+person,\s+then\s+tag\s+it\s+with\s+`roadmap_tag`/,
         'roadmap: a suggested feature is confirmed with the person before it is tagged');
     like($skill, qr/Mark it shipped only when\s+they say it is done or live/, 'roadmap: marks a feature shipped only when told');
+    like($skill, qr/`track_work --action status`\s+says how the person tracks roadmap work, in `roadmap_tasks`/,
+        'roadmap: track_work status says how the person tracks roadmap work');
+    like($skill, qr/With `per_feature`, the default[^.]*each feature gets its own task/s,
+        'roadmap: one task per feature by default');
+    like($skill, qr/never\s+tag one task to several features/, 'roadmap: never tags one task to several features');
+    like($skill, qr/the\s+answer carries a note: tell the person/, 'roadmap: passes on the note for a task already on another feature');
+    like($skill, qr/`--new_task true` only when the person\s+wants a new task/, 'roadmap: a new task with one task per roadmap only when wanted');
+    like($skill, qr/The person changes this by asking you to; only then\s+call `track_work --action set_preference --roadmap_tasks/,
+        'roadmap: changes roadmap_tasks only when the person asks');
     like($skill, qr/is for managers, and that they can still tag their own work/, 'roadmap: tells a Builder plainly');
 
     like(slurp("shared/$design"), qr/`roadmap_tag` \(`kind` `design`\)/,

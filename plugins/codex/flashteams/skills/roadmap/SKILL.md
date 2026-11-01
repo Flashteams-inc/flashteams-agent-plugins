@@ -88,6 +88,23 @@ tools of the same names and arguments. With neither, say so.
   tag it with `roadmap_tag`, a standalone task as `kind` `task` and a
   task inside a project through its project. Never tag a feature the
   person has not confirmed.
+- **One task per feature, or per roadmap:** `track_work --action status`
+  says how the person tracks roadmap work, in `roadmap_tasks`, with a
+  line on what it means. With `per_feature`, the default (and when status
+  says nothing about it), each feature gets its own task, so its progress
+  counts its own work: when the work moves on to another feature, start
+  another task for it with `track_work`, named for that feature, and never
+  tag one task to several features. Tagging a task that is already on
+  another feature still works, since a manager may mean it, but the
+  answer carries a note: tell the person, and make a task for this feature
+  instead unless they want it on both. With `per_roadmap`, one task covers
+  their work on a roadmap: `track_work --action start` may answer with
+  their open task for that roadmap instead of making one (`task_made`
+  false). Tag that task to the feature with `roadmap_tag` (`kind` `task`)
+  and keep working in it, and pass `--new_task true` only when the person
+  wants a new task. The person changes this by asking you to; only then
+  call `track_work --action set_preference --roadmap_tasks per_feature`
+  (or `per_roadmap`).
 - Take a tag off (`untag`) only when the person asks.
 
 An analysis or a diagram stays in Flash Console's Library on the person's

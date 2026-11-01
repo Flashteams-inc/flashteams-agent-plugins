@@ -89,6 +89,20 @@ one-line summary that an agent is working on it, never the conversation,
 and the person sees which of their chats it is, by its name or the start
 of its session id.
 
+Work on the product Roadmap gets one task per feature by default, so each
+feature's progress counts its own work: `track_work --action status` says
+the person's choice in `roadmap_tasks`. With `per_feature` (the default,
+and when status says nothing about it), work on another feature gets its
+own task, started with `track_work` and named for that feature, never one
+task tagged to several features. With `per_roadmap`, one task covers
+their work on a roadmap: when `track_work --action start` answers with
+their open task for that roadmap instead of making one, tag it to the
+feature with `roadmap_tag` and keep working in it, and pass
+`--new_task true` only when they want a new one. The person changes this
+by asking; only then call `track_work --action set_preference
+--roadmap_tasks per_feature` (or `per_roadmap`). The roadmap skill says
+more.
+
 Never invent hours. Leave `actual_hours` out so the measured time stands.
 Pass it only when that time is wrong, for example when the task sat
 started while nobody worked on it, and then give the real time worked,

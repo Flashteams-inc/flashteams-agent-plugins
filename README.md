@@ -250,6 +250,15 @@ its task, not only a task made with `track_work`: teammates see a
 one-line summary that an agent is on it, and you see which of your chats
 it is, by its name or the start of its session id.
 
+From 1.10.3 the `roadmap` skill and the `flashteams` skill say how you
+track roadmap work, which `track_work` status now reports as
+`roadmap_tasks`. By default each roadmap feature gets its own task, so a
+feature's progress counts its own work and a task is never shared across
+features. You can choose one task per roadmap instead: the agent then
+keeps working in your open task for that roadmap, tagged to each feature
+it covers, and makes a new one only if you want it. Ask the agent to
+change it.
+
 ## Sandboxes
 
 The `flashteams` command reaches Flash Console through a private socket on
