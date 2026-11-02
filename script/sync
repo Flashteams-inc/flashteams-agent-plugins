@@ -3,8 +3,9 @@
 # Edit them in shared/, then run this. script/check fails when a copy is
 # out of date.
 #
-# The flashteams skill is the same for both agents, except that Claude
-# Code's copy adds allowed-tools, a field Codex does not read. It lets the
+# The flashteams skill is the same for every agent, except that Claude
+# Code's copy adds allowed-tools, a field Codex does not read and Grok CLI
+# reads without acting on. It lets the
 # skill run every flashteams command without Claude Code asking, because
 # Flash Console itself asks the person before the actions that need it.
 # Claude Code keeps that grant only for the turn that loads the skill; the
@@ -13,21 +14,21 @@
 # PATH, so only it gets the shim.
 #
 # The three audit skills and the scan helper they run are the same for
-# both agents. Each skill finds the helper two folders above its own, in
+# every agent. Each skill finds the helper two folders above its own, in
 # scan/.
 set -eu
 cd "$(dirname "$0")/.."
 
 allowed='Bash(flashteams:*)'
 audits='security-audit sql-audit architecture-review'
-# Flash Design: planning UI on a FlashTeams canvas, the same for both agents.
+# Flash Design: planning UI on a FlashTeams canvas, the same for every agent.
 design='flash-design'
 # Visual QA: a change drawn before and after in Flash Console's Diagrams.
 review='visual-qa'
 # The Roadmap: features planned across products, and what is tagged to them.
 plan='roadmap'
 
-for plugin in plugins/claude/flashteams plugins/codex/flashteams; do
+for plugin in plugins/claude/flashteams plugins/codex/flashteams plugins/grok/flashteams; do
   mkdir -p "$plugin/hooks" "$plugin/skills/flashteams" "$plugin/scan"
   cp shared/hooks/flashteams-hook.pl shared/hooks/flashteams-hook.sh "$plugin/hooks/"
   cp shared/skills/flashteams/SKILL.md "$plugin/skills/flashteams/"
@@ -45,7 +46,7 @@ chmod 755 plugins/claude/flashteams/bin/flashteams
 ALLOWED_TOOLS="$allowed" perl -pi -e 'print "allowed-tools: $ENV{ALLOWED_TOOLS}\n" if $_ eq "---\n" && ++$fences == 2' \
   plugins/claude/flashteams/skills/flashteams/SKILL.md
 
-for plugin in plugins/claude/flashteams-mcp plugins/codex/flashteams-mcp; do
+for plugin in plugins/claude/flashteams-mcp plugins/codex/flashteams-mcp plugins/grok/flashteams-mcp; do
   mkdir -p "$plugin/skills/flashteams-next-task"
   cp shared/skills/flashteams-next-task/SKILL.md "$plugin/skills/flashteams-next-task/"
 done

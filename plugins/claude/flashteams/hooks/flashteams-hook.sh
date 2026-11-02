@@ -5,9 +5,9 @@
 #
 # through a short guard that first checks this file is still there (see the
 # README). On macOS and Linux this passes the agent's input on to
-# flashteams-hook.pl. On Windows, where Claude Code runs it in Git Bash, and
-# inside WSL in a Flash Console pane, it passes the input on to Flash
-# Console's own flashteams.exe instead, as
+# flashteams-hook.pl. On Windows, where Claude Code and Grok CLI run it in
+# Git Bash, and inside WSL in a Flash Console pane, it passes the input on
+# to Flash Console's own flashteams.exe instead, as
 #
 #   flashteams.exe --hook <agent> <hook-event>
 #

@@ -1,8 +1,8 @@
 # FlashTeams agent plugins
 
-Plugins that connect Claude Code and Codex to FlashTeams. One repository
-serves both: a Claude Code marketplace and a Codex marketplace, each named
-`flashteams`, each with two plugins.
+Plugins that connect Claude Code, Codex and Grok CLI to FlashTeams. One
+repository serves all three: a Claude Code marketplace, a Codex marketplace
+and a Grok CLI marketplace, each named `flashteams`, each with two plugins.
 
 **`flashteams`** works with Flash Console, the FlashTeams terminal, and
 needs no sign-in of its own. It gives the agent:
@@ -18,6 +18,8 @@ needs no sign-in of its own. It gives the agent:
   the task you chose in Flash Console, how to use the command, and how
   FlashTeams expects agents to work. Nothing else is loaded up front; the
   agent looks up projects and tasks with the tools when it needs them.
+  Claude Code and Codex only: Grok CLI reads nothing a session start's
+  hook prints, so it learns the command from the skill instead.
 - **The `flashteams` skill**, which teaches the agent the command and the
   FlashTeams way of working a task.
 - **No Claude Code permission prompt for the `flashteams` command.** Flash
@@ -26,7 +28,9 @@ needs no sign-in of its own. It gives the agent:
 - **Agent status for Flash Console.** Small hooks tell Flash Console when
   the agent starts, is working, needs your permission or an answer, is done
   or failed, so the agent's tab shows it, and how far the agent got through
-  its to-do list, so Flash Console's plan chip can show it.
+  its to-do list, so Flash Console's plan chip can show it. Grok CLI tells
+  when it needs your permission but not when it asks a question, and its
+  to-do list is not read yet.
 - **Security, SQL and architecture audits** of the repository you are in,
   run on your computer and recorded in FlashTeams. See
   [Audits](#audits).
@@ -38,8 +42,8 @@ Flash Console, or if you prefer MCP. You can install `flashteams` alone.
 
 On macOS and Linux the hooks need Perl, which comes with macOS. On Windows
 they need no Perl: they hand each hook to Flash Console's own
-`flashteams.exe`, and Claude Code needs Git for Windows to run them (see
-[Windows](#windows)). Without Perl on a Mac, without Flash Console, or
+`flashteams.exe`, and Claude Code and Grok CLI need Git for Windows to run
+them (see [Windows](#windows)). Without Perl on a Mac, without Flash Console, or
 with anything else missing, they quietly do nothing.
 
 ## Install
@@ -66,6 +70,26 @@ codex plugin add flashteams-mcp@flashteams
 
 Start a new Codex session. Then trust the hooks, as below.
 
+### Grok CLI
+
+```sh
+grok plugin marketplace add Flashteams-inc/flashteams-agent-plugins
+grok plugin install flashteams --trust
+grok plugin enable flashteams
+# Optional: the MCP server
+grok plugin install flashteams-mcp --trust
+grok plugin enable flashteams-mcp
+```
+
+Start a new Grok CLI session. Grok CLI reads this repository's own Grok
+CLI index, `.grok-plugin/marketplace.json`, so it installs the plugins made
+for it. `--trust` lets the plugin's hooks and MCP server run, and a plugin
+stays off until it is enabled.
+
+Grok CLI also reads Claude Code's plugins. When it runs the Claude Code
+plugin's hooks, they do nothing, so the Grok CLI plugin is the one that
+reports, and nothing is sent twice.
+
 ## Sign in
 
 - **`flashteams`:** sign in to FlashTeams in Flash Console. There is
@@ -74,7 +98,9 @@ Start a new Codex session. Then trust the hooks, as below.
   or read and update.
 - **`flashteams-mcp`:** in Claude Code, run `/mcp`, choose `flashteams`,
   then **Authenticate**, and sign in with your FlashTeams account in the
-  browser. In Codex, run `codex mcp login flashteams`.
+  browser. In Codex, run `codex mcp login flashteams`. In Grok CLI, run
+  `/mcps`, choose `flashteams` and press `i`, or use a FlashTeams tool and
+  Grok CLI opens the browser to sign in.
 
 ## Permission prompts
 
@@ -96,17 +122,29 @@ the skill tells the agent not to try again unless you ask.
   The exact rules are in [The permission check](#the-permission-check).
 - **Codex:** unchanged. Codex asks before running the command outside its
   sandbox (see below), and Flash Console asks as above.
+- **Grok CLI:** asks before each `flashteams` command, as before any shell
+  command, unless you allow it. A plugin cannot allow it for you: Grok CLI
+  takes a hook's answer only as "not blocked", never as an approval. To let
+  plain `flashteams` commands run, add a rule to `~/.grok/config.toml`:
+
+  ```toml
+  [permission]
+  rules = [
+    { action = "allow", tool = "bash", pattern = "flashteams *" },
+  ]
+  ```
 
 In a Flash Console pane, Claude Code's own questions also show as a card
 with buttons on the pane, so you can answer with a click as well as with
 the keyboard: a tool it wants to use (Allow, Deny), and an MCP server
 asking to go ahead with nothing to fill in, such as the Supabase server
 before destructive SQL (Accept, Decline). Answer in the terminal leaves the
-question to Claude Code's own prompt. See [The asks](#the-asks).
+question to Claude Code's own prompt. See [The asks](#the-asks). Grok CLI's
+questions stay in the terminal: it has no hook that waits for an answer.
 
 ## Audits
 
-From 1.8.0 the `flashteams` plugin has three audit skills, for both agents.
+From 1.8.0 the `flashteams` plugin has three audit skills, for every agent.
 In Claude Code they are commands:
 
 | Command | What it does |
@@ -116,7 +154,8 @@ In Claude Code they are commands:
 | `/flashteams:architecture-review` | Runs no scanners. Uses the product's FlashTeams code map when there is one (`code_map`, `query_codebase`, `read_docs`), otherwise reads the repository, and writes a report a new engineer can follow: the main parts, how data flows, where the auth boundaries are, then the risks (cycles, modules everything leans on, dead code, coupling, hard-to-reverse choices, bottlenecks). |
 
 In Codex, ask for a security audit, a SQL audit or an architecture review,
-or name the skill.
+or name the skill. In Grok CLI, ask for one, or run `/security-audit`,
+`/sql-audit` or `/architecture-review`.
 
 Each skill runs the plugin's helper, `scan/flashteams-scan.pl`, a Perl
 program (Perl 5.14 or later, with the modules that ship with it, git, and
@@ -281,8 +320,11 @@ that. The command then says so and exits 3.
   `flashteams` outside the sandbox when Codex asks.
 - **Claude Code:** with its sandbox on, add the Flash Console socket (see
   [Where](#where)) to `sandbox.network.allowUnixSockets` in your settings.
+- **Grok CLI:** runs without a sandbox unless started with `--sandbox`. If
+  the command says a sandbox blocked it, start Grok CLI without one.
 
-The hooks are not affected: both agents run hooks outside the sandbox.
+Claude Code's and Codex's hooks are not affected: they run outside the
+sandbox.
 
 ## Trust the hooks in Codex
 
@@ -318,6 +360,10 @@ do nothing.
   Bash too, finds the `flashteams` command through the plugin's shim; its
   PowerShell tool finds `flashteams.exe` only in a Flash Console shell, whose
   `PATH` includes it.
+- **Grok CLI** needs Git for Windows too. It runs its hook commands in Git
+  Bash when it finds it, as Claude Code does, and the starter then runs
+  `flashteams.exe`. Without Git Bash it runs them in PowerShell, where they
+  stop at once and do nothing, as Claude Code's do.
 - **Codex** needs version 0.131 or later, the first to read
   `commandWindows`, the command it runs in place of `command` on Windows.
   Codex runs it in PowerShell. It is one line that uses only PowerShell's
@@ -371,8 +417,21 @@ codex plugin marketplace upgrade flashteams
 codex plugin add flashteams@flashteams
 ```
 
+Grok CLI:
+
+```sh
+grok plugin marketplace update flashteams
+grok plugin update flashteams
+```
+
 Restart the agent afterwards. In Codex, check `/hooks` in case the update
 changed the hooks.
+
+**Coming from 1.9.6:** Grok CLI gets its own `flashteams` and
+`flashteams-mcp` plugins (see [Grok CLI](#grok-cli)). When Grok CLI runs the
+Claude Code plugin's hooks, they now do nothing, so its status comes from its
+own plugin, once. The audit skills also say where Grok CLI keeps the scan
+helper. Nothing else changes for Claude Code and Codex.
 
 **Coming from 1.7.0:** the `flashteams` plugin gains the security, SQL and
 architecture audits (see [Audits](#audits)) and the scan helper they run.
@@ -414,6 +473,14 @@ Codex:
 codex plugin remove flashteams@flashteams
 codex plugin remove flashteams-mcp@flashteams
 codex plugin marketplace remove flashteams
+```
+
+Grok CLI:
+
+```sh
+grok plugin uninstall flashteams
+grok plugin uninstall flashteams-mcp
+grok plugin marketplace remove https://github.com/Flashteams-inc/flashteams-agent-plugins
 ```
 
 To also sign the MCP server out of FlashTeams: in Claude Code, `/mcp`,
@@ -544,13 +611,17 @@ earlier, which name files in that folder, and `sh` on a missing file prints
 an error and exits non-zero. The guard exits 0 without a word when the
 starter is missing or cannot be read.
 
-`$(exit 0); ` in front of Claude Code's commands is for Windows. In `sh`,
-`bash` and `zsh` it does nothing. Claude Code on a Windows PC without Git
-Bash runs its hook commands in PowerShell, which has no `sh`, so each would
-fail with an error on every event; in PowerShell `$(exit 0)` ends the run
-there, with exit 0, so the hooks quietly do nothing instead. Claude Code
-has no field for a separate Windows command, so one command has to serve
-both.
+Grok CLI uses `${GROK_PLUGIN_ROOT}`, and its commands start with
+`$(exit 0); ` as Claude Code's do. Every one of them discards stdout:
+Grok CLI reads nothing these hooks could print.
+
+`$(exit 0); ` in front of Claude Code's and Grok CLI's commands is for
+Windows. In `sh`, `bash` and `zsh` it does nothing. Either agent on a
+Windows PC without Git Bash runs its hook commands in PowerShell, which has
+no `sh`, so each would fail with an error on every event; in PowerShell
+`$(exit 0)` ends the run there, with exit 0, so the hooks quietly do nothing
+instead. Neither has a field for a separate Windows command, so one command
+has to serve both.
 
 ### Fields
 
@@ -559,11 +630,11 @@ Only `event` is required. Fields with nothing to say are left out.
 | Field | Meaning |
 | :- | :- |
 | `v` | Protocol version, `1`. Receivers drop versions they do not speak. |
-| `agent` | `claude` or `codex`. |
+| `agent` | `claude`, `codex` or `grok`. |
 | `event` | What happened; see the next table. Receivers ignore events they do not know. |
 | `session_id` | The agent's id for its conversation. |
 | `cwd` | The agent's working folder. |
-| `pane` | The Flash Console pane, from `FLASH_CONSOLE_PANE`. Claude Code only. |
+| `pane` | The Flash Console pane, from `FLASH_CONSOLE_PANE`. Claude Code and Grok CLI only. |
 | `project` | The name of the folder holding the git repository around `cwd`, or of `cwd` itself. |
 | `source` | Why the session started, on `session_start` only: the agent's own word, passed on as given. Both agents document `startup`, `resume`, `clear` and `compact`; Claude Code also sends `fork`. |
 | `query` | Excerpt of the prompt. |
@@ -576,7 +647,7 @@ Only `event` is required. Fields with nothing to say are left out.
 | `error_message` | Excerpt of the error text. |
 | `subagent` | `true` when the hook fired for a subagent's tool or turn. |
 | `active_subagents` | Optional complete list of active worker IDs in the parent conversation. An empty list clears workers; absent means unknown. Derived from Claude Stop/SubagentStop background tasks, with descriptions and commands left out. |
-| `subagent_id` | The subagent's own id, when the agent's hook input names one: `agent_id`, which Claude Code and Codex send only for a hook that fires inside a subagent. Never sent for the main agent. |
+| `subagent_id` | The subagent's own id, when the agent's hook input names one: `agent_id`, which Claude Code and Codex send only for a hook that fires inside a subagent. Never sent for the main agent. Grok CLI names only the kind of subagent, `subagentType`, so its subagents' events carry `subagent` alone. |
 | `interrupted` | `true` when the person interrupted the turn. |
 | `plan` | The agent's whole to-do list, on `tool_complete` of a tool that writes or lists it: a list of steps, each `{"text": ..., "status": ...}` with `"id"` when the agent gives its steps ids. `status` is `pending`, `in_progress` or `completed`; any other is sent as `pending`. Empty when the agent cleared its list. At most 50 steps. |
 | `plan_step` | One step of the plan added, changed or taken out, on `tool_complete`: `{"id": ..., "text": ..., "status": ...}`, with `text` and `status` only when they changed, and `status` `deleted` for a step taken out. |
@@ -609,18 +680,21 @@ event then carries the plan in place of the `tool_input` excerpt:
 
 ### Events
 
-| Event | Claude Code hook | Codex hook |
-| :- | :- | :- |
-| `session_start` | `SessionStart`, with `source` | `SessionStart`, with `source` |
-| `prompt_submit` | `UserPromptSubmit` | `UserPromptSubmit` |
-| `subagent_start` | `SubagentStart`, naming the worker | |
-| `subagent_stop` | `SubagentStop`, naming the worker | |
-| `tool_complete` | `PostToolUse`, `PostToolUseFailure` | `PostToolUse` |
-| `permission_request` | `PermissionRequest`; `Notification` of type `permission_prompt` | `PermissionRequest` |
-| `question_asked` | `PreToolUse` and `PermissionRequest` for `AskUserQuestion`; `Notification` of type `elicitation_dialog` or `elicitation_url_dialog` | `PreToolUse` for `request_user_input` |
-| `stop` | `Stop`, also when `stop_hook_active` is true | `Stop`; `Interrupt`, with `interrupted: true` |
-| `stop_failure` | `StopFailure`, with `error_type` and `error_message` | |
-| `idle_prompt` | `Notification` of type `idle_prompt` | |
+| Event | Claude Code hook | Codex hook | Grok CLI hook |
+| :- | :- | :- | :- |
+| `session_start` | `SessionStart`, with `source` | `SessionStart`, with `source` | `SessionStart`, with `source` |
+| `prompt_submit` | `UserPromptSubmit` | `UserPromptSubmit` | `UserPromptSubmit` |
+| `subagent_start` | `SubagentStart`, naming the worker | | |
+| `subagent_stop` | `SubagentStop`, naming the worker | | |
+| `tool_complete` | `PostToolUse`, `PostToolUseFailure` | `PostToolUse` | `PostToolUse`, `PostToolUseFailure` |
+| `permission_request` | `PermissionRequest`; `Notification` of type `permission_prompt` | `PermissionRequest` | `Notification` of type `permission_prompt` |
+| `question_asked` | `PreToolUse` and `PermissionRequest` for `AskUserQuestion`; `Notification` of type `elicitation_dialog` or `elicitation_url_dialog` | `PreToolUse` for `request_user_input` | |
+| `stop` | `Stop`, also when `stop_hook_active` is true | `Stop`; `Interrupt`, with `interrupted: true` | `Stop` with reason `end_turn`, or none (not the `Stop` it fires as the session closes); `StopCancelled`, with `interrupted: true` |
+| `stop_failure` | `StopFailure`, with `error_type` and `error_message` | | `StopFailure`, with `error_type` and `error_message` from the last message or `errorDetails`; `StopCancelled` for `max_turns` or `no_progress`, with that as `error_type` |
+| `idle_prompt` | `Notification` of type `idle_prompt` | | `Notification` of type `idle_prompt` |
+
+Grok CLI writes most fields twice, in its own camelCase and as Claude Code
+names them; the hook reads either.
 
 ### The briefing
 
@@ -636,7 +710,7 @@ again and writes one request line:
 | `v` | Protocol version, `1`. |
 | `op` | `briefing`. |
 | `id` | 32 random hex digits, new for each request. |
-| `agent` | `claude` or `codex`. |
+| `agent` | `claude` or `codex`. Grok CLI is not briefed: it reads nothing a session start's hook prints. |
 | `cwd` | The agent's working folder, or the hook's own when the agent gave none. |
 | `pane` | `FLASH_CONSOLE_PANE` for Claude Code; always empty for Codex, for the reason under [The environment Flash Console sets](#the-environment-flash-console-sets). |
 | `source` | Why the session started, as on `session_start`; left out when the agent gave none. |
@@ -871,8 +945,8 @@ Every shell Flash Console starts has `FLASH_CONSOLE_AGENT_PROTOCOL_VERSION=1`,
 secret), and `FLASH_CONSOLE_BIN`, the folder that holds the `flashteams`
 command, which Flash Console also adds to the end of `PATH`.
 
-Claude Code runs its hooks inside its own process in the tab, so its events
-carry `pane`. Codex runs hooks in a shared background server whose
+Claude Code and Grok CLI run their hooks inside their own process in the
+tab, so their events carry `pane`. Codex runs hooks in a shared background server whose
 environment belongs to whichever terminal started it, so Codex events never
 carry `pane`, even when the variable is visible. Flash Console matches a
 Codex event to its pane by session, working folder and timing, and drops it
@@ -931,6 +1005,7 @@ Flash Console sets.
 ```text
 .claude-plugin/marketplace.json     Claude Code marketplace
 .agents/plugins/marketplace.json    Codex marketplace
+.grok-plugin/marketplace.json       Grok CLI marketplace
 plugins/claude/flashteams/          the Claude Code plugin
   .claude-plugin/plugin.json
   bin/flashteams                    copy of shared/bin/
@@ -955,6 +1030,12 @@ plugins/codex/flashteams/           the Codex plugin
 plugins/codex/flashteams-mcp/       the optional Codex MCP plugin
   .codex-plugin/plugin.json
   .mcp.json and skills/             as above
+plugins/grok/flashteams/            the Grok CLI plugin
+  .grok-plugin/plugin.json
+  hooks/, scan/ and skills/         as above, without allowed-tools
+plugins/grok/flashteams-mcp/        the optional Grok CLI MCP plugin
+  .grok-plugin/plugin.json
+  .mcp.json and skills/             as above
 shared/                             the hook program, shim, scan helper and skills, edited here
 script/check                        every check, as CI runs it
 script/sync                         copies shared/ into the plugins
@@ -963,7 +1044,11 @@ test/                               tests: hook.t, windows.t, ask.t, bin.t, scan
 
 Each plugin keeps its own copy of the shared files because each agent
 installs a plugin folder on its own. Each agent's plugins are separate from
-the other agent's so neither agent loads the other's manifest.
+the other agents' so no agent loads another's manifest. Grok CLI would read
+a Claude Code plugin's `.claude-plugin/plugin.json` if it had nothing of its
+own, so the Grok CLI plugins have `.grok-plugin/plugin.json`, which it reads
+first, and its marketplace index, `.grok-plugin/marketplace.json`, which it
+reads before Claude Code's.
 
 Claude Code's copy of the `flashteams` skill adds one line to the
 frontmatter, `allowed-tools: Bash(flashteams:*)`, which lets every
@@ -990,14 +1075,16 @@ one appears.
 1. Edit the hook program, the shim, the scan helper and the skills in
    `shared/`, never the copies, then run `script/sync`.
 2. Run `script/check`. It compiles the Perl, runs ShellCheck on the shell
-   scripts, runs Claude Code's plugin validator when `claude` is installed,
-   and runs the tests. GitHub Actions runs the same script on macOS and
+   scripts, runs Claude Code's plugin validator when `claude` is installed
+   and Grok CLI's when `grok` is, and runs the tests. GitHub Actions runs the same script on macOS and
    Ubuntu for every push and pull request.
-3. For a release, raise `version` in all four plugin manifests
+3. For a release, raise `version` in all six plugin manifests
    (`plugins/claude/flashteams/.claude-plugin/plugin.json`,
    `plugins/claude/flashteams-mcp/.claude-plugin/plugin.json`,
    `plugins/codex/flashteams/.codex-plugin/plugin.json`,
-   `plugins/codex/flashteams-mcp/.codex-plugin/plugin.json`) and `$VERSION`
+   `plugins/codex/flashteams-mcp/.codex-plugin/plugin.json`,
+   `plugins/grok/flashteams/.grok-plugin/plugin.json`,
+   `plugins/grok/flashteams-mcp/.grok-plugin/plugin.json`) and `$VERSION`
    in `shared/hooks/flashteams-hook.pl` and `shared/scan/flashteams-scan.pl`
    together (the tests check they match). People only receive an update
    when the version changes.

@@ -7,8 +7,9 @@
 #
 #   flashteams.exe --hook <agent> <hook-event>
 #
-# Claude Code runs its hook commands in Git Bash, and the starter hands the
-# hook over. Codex runs commandWindows, one line of PowerShell, instead.
+# Claude Code and Grok CLI run their hook commands in Git Bash, and the
+# starter hands the hook over. Codex runs commandWindows, one line of
+# PowerShell, instead.
 #
 # These tests run each agent's commands from hooks.json as Git Bash does,
 # with OS set to Windows_NT as Windows sets it for every program, against a
@@ -20,9 +21,9 @@
 # whatever happens, without starting Perl or opening the socket. Inside WSL
 # in a Flash Console pane the hooks hand over the same way. Claude
 # Code's $(exit 0) is checked in every sh-like shell here. When pwsh is
-# installed, PowerShell parses every Windows command, Claude Code's
-# commands are run as Claude Code runs them without Git Bash, and Codex's
-# Windows commands are run with no Flash Console to find.
+# installed, PowerShell parses every Windows command, Claude Code's and
+# Grok CLI's commands are run as they run them without Git Bash, and
+# Codex's Windows commands are run with no Flash Console to find.
 #
 # What only a Windows PC can show is listed in the README under Windows.
 
@@ -46,8 +47,9 @@ my $ROOT = abs_path("$FindBin::Bin/..");
 my %PLUGIN = (
     claude => "$ROOT/plugins/claude/flashteams",
     codex  => "$ROOT/plugins/codex/flashteams",
+    grok   => "$ROOT/plugins/grok/flashteams",
 );
-my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT');
+my %ROOT_VARIABLE = (claude => 'CLAUDE_PLUGIN_ROOT', codex => 'PLUGIN_ROOT', grok => 'GROK_PLUGIN_ROOT');
 my $PERMISSION = 'flashteams-permission';
 my $POWERSHELL_EXIT = '$(exit 0); ';
 my $ALLOW = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow",'
@@ -260,8 +262,15 @@ for my $agent (sort keys %HANDLER) {
 
 # ---------------------------------------------------------------------------
 # A session start passes on one whole briefing object and nothing else.
+# Grok CLI reads nothing a session start prints, so its passes on nothing.
 
-for my $agent (sort keys %HANDLER) {
+{
+    my $run = agent_run('grok', 'SessionStart', env => prints("$BRIEFING\n"));
+    clean_run($run, 'grok session start on Windows');
+    handed_over($run, 'grok session start on Windows', 'grok', 'SessionStart');
+}
+
+for my $agent (grep { $_ ne 'grok' } sort keys %HANDLER) {
     my $good = agent_run($agent, 'SessionStart', env => prints("$BRIEFING\n"));
     clean_run($good, "$agent briefing on Windows", "$BRIEFING\n");
     handed_over($good, "$agent briefing on Windows", $agent, 'SessionStart');
@@ -491,8 +500,9 @@ for my $agent (sort keys %HANDLER) {
         } else {
             handed_over($run, $label, $agent, $name);
             is($run->{perl}, 0, "$label: never starts Perl");
-            is($run->{stdout}, $name eq 'SessionStart' ? "$BRIEFING\n" : '',
-                $name eq 'SessionStart' ? "$label: passes on the briefing" : "$label: prints nothing");
+            # Grok CLI reads nothing a session start prints.
+            my $briefs = $name eq 'SessionStart' && $agent ne 'grok';
+            is($run->{stdout}, $briefs ? "$BRIEFING\n" : '', $briefs ? "$label: passes on the briefing" : "$label: prints nothing");
         }
         for my $bin (undef, '', 'relative/bin') {
             my $where = defined $bin ? "FLASH_CONSOLE_BIN '$bin'" : 'no FLASH_CONSOLE_BIN';
@@ -585,8 +595,9 @@ SKIP: {
     write_file("$sh_bin/sh", qq{#!/bin/sh\n: > "\${STAND_IN_LOG:?}/sh"\nexit 0\n}, 0755);
 
     my @claude = map { $HANDLER{claude}{$_}{command} } sort keys %{ $HANDLER{claude} };
+    my @grok = map { $HANDLER{grok}{$_}{command} } sort keys %{ $HANDLER{grok} };
     my @codex = map { $HANDLER{codex}{$_}{commandWindows} } sort keys %{ $HANDLER{codex} };
-    my @rewritten = map { s/\$\{CLAUDE_PLUGIN_ROOT\}/\${env:CLAUDE_PLUGIN_ROOT}/gr } @claude;
+    my @rewritten = map { s/\$\{(CLAUDE|GROK)_PLUGIN_ROOT\}/\${env:$1_PLUGIN_ROOT}/gr } @claude, @grok;
 
     # Parsing: one pwsh, every command, each parse error named.
     my $parse = run(
@@ -599,15 +610,16 @@ SKIP: {
     is($parse->{status}, 0, 'pwsh parsed the commands');
     is($parse->{stdout}, '', 'every Windows command parses in PowerShell') or diag($parse->{stdout});
 
-    my %powershell_env = (OS => undef, PATH => "$sh_bin:$ENV{PATH}", CLAUDE_PLUGIN_ROOT => $PLUGIN{claude});
+    my %powershell_env = (OS => undef, PATH => "$sh_bin:$ENV{PATH}", CLAUDE_PLUGIN_ROOT => $PLUGIN{claude},
+        GROK_PLUGIN_ROOT => $PLUGIN{grok});
     for my $i (0 .. $#rewritten) {
-        my ($name) = $rewritten[$i] =~ / (\S+)\z/;
+        my ($agent, $name) = $rewritten[$i] =~ / (\S+) (\S+)\z/;
         my $run = run(command => [$pwsh, '-NoProfile', '-NonInteractive', '-Command', $rewritten[$i]],
             env => \%powershell_env);
-        is($run->{status}, 0, "PowerShell: Claude Code's $name exits 0");
-        is($run->{stdout}, '', "PowerShell: Claude Code's $name prints nothing");
-        is($run->{stderr}, '', "PowerShell: Claude Code's $name says nothing on stderr");
-        ok(!$run->{sh}, "PowerShell: Claude Code's $name stops before sh");
+        is($run->{status}, 0, "PowerShell: ${agent}'s $name exits 0");
+        is($run->{stdout}, '', "PowerShell: ${agent}'s $name prints nothing");
+        is($run->{stderr}, '', "PowerShell: ${agent}'s $name says nothing on stderr");
+        ok(!$run->{sh}, "PowerShell: ${agent}'s $name stops before sh");
     }
     my %codex_env = (OS => undef, LOCALAPPDATA => undef, FLASH_CONSOLE_BIN => undef);
     for my $command (@codex) {

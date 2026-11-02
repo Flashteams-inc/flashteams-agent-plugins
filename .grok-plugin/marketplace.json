@@ -1,0 +1,28 @@
+{
+  "name": "flashteams",
+  "description": "FlashTeams for Grok CLI: every FlashTeams tool through Flash Console, live agent status in Flash Console, and an optional MCP server.",
+  "owner": {
+    "name": "FlashTeams",
+    "url": "https://flashteams.ai"
+  },
+  "plugins": [
+    {
+      "name": "flashteams",
+      "description": "Gives Grok CLI the FlashTeams skills for Flash Console's flashteams command, and tells Flash Console what Grok CLI is doing.",
+      "category": "productivity",
+      "source": {
+        "type": "local",
+        "path": "./plugins/grok/flashteams"
+      }
+    },
+    {
+      "name": "flashteams-mcp",
+      "description": "Optional: the FlashTeams MCP server, with your own FlashTeams sign-in, and a skill for working your next task.",
+      "category": "productivity",
+      "source": {
+        "type": "local",
+        "path": "./plugins/grok/flashteams-mcp"
+      }
+    }
+  ]
+}

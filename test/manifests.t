@@ -22,12 +22,15 @@ my $ROOT = abs_path("$FindBin::Bin/..");
 my %PLUGINS = (
     claude => { flashteams => 'plugins/claude/flashteams', 'flashteams-mcp' => 'plugins/claude/flashteams-mcp' },
     codex  => { flashteams => 'plugins/codex/flashteams',  'flashteams-mcp' => 'plugins/codex/flashteams-mcp' },
+    grok   => { flashteams => 'plugins/grok/flashteams',   'flashteams-mcp' => 'plugins/grok/flashteams-mcp' },
 );
 my $CLAUDE     = $PLUGINS{claude}{flashteams};
 my $CLAUDE_MCP = $PLUGINS{claude}{'flashteams-mcp'};
 my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
-my $RELEASE = '1.11.0';
+my $GROK       = $PLUGINS{grok}{flashteams};
+my $GROK_MCP   = $PLUGINS{grok}{'flashteams-mcp'};
+my $RELEASE = '1.11.1';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -185,14 +188,70 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         'Codex flashteams-mcp bundles the flashteams MCP server, with no token or header');
 }
 
-# Neither agent can load the other's manifest. A Codex plugin has no root
-# plugin.json, which would make Codex skip its hooks, and no mcp.json, which
-# Codex would not read from this layout.
+# ---------------------------------------------------------------------------
+# Grok CLI marketplace and plugins.
+#
+# Grok CLI reads its own index, .grok-plugin/marketplace.json, before Claude
+# Code's, so it installs the plugins made for it, whose hooks name grok.
+# Each has its manifest at .grok-plugin/plugin.json and keeps its hooks,
+# skills and MCP servers in the folders Grok CLI looks in by default.
+
+{
+    my $market = json('.grok-plugin/marketplace.json');
+    is($market->{name}, 'flashteams', 'Grok CLI marketplace is named flashteams');
+    ok($market->{owner} && $market->{owner}{name}, 'Grok CLI marketplace has an owner');
+    my @entries = @{ $market->{plugins} || [] };
+    is_deeply([map { $_->{name} } @entries], [qw(flashteams flashteams-mcp)],
+        'Grok CLI marketplace lists flashteams and flashteams-mcp');
+    for my $entry (@entries) {
+        my $name = $entry->{name};
+        is_deeply($entry->{source}, { type => 'local', path => "./$PLUGINS{grok}{$name}" },
+            "Grok CLI $name entry points at its own folder");
+        ok(!exists $entry->{version}, "Grok CLI $name: the version lives only in plugin.json");
+        ok($entry->{description}, "Grok CLI $name entry has a description");
+
+        my $manifest = json("$PLUGINS{grok}{$name}/.grok-plugin/plugin.json");
+        is($manifest->{name},    $name,         "Grok CLI $name plugin.json name");
+        like($manifest->{name}, qr/\A[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\z/,
+            "Grok CLI $name: a name Grok CLI accepts, lowercase letters, digits and hyphens");
+        is($manifest->{version}, $hook_version, "Grok CLI $name plugin version matches the hook");
+        is($manifest->{license}, 'MIT',         "Grok CLI $name plugin license");
+        ok($manifest->{description} && $manifest->{author} && $manifest->{author}{name},
+            "Grok CLI $name plugin.json has a description and an author");
+        ok(!exists $manifest->{$_}, "Grok CLI $name plugin.json names no $_, so the default folders hold them")
+          for qw(hooks mcpServers skills);
+    }
+
+    # Grok CLI puts no plugin folder on the PATH, so its plugin has no shim:
+    # Flash Console puts the flashteams command on the PATH itself.
+    is_deeply(
+        [files_in($GROK)],
+        [qw(.grok-plugin/plugin.json hooks/flashteams-hook.pl hooks/flashteams-hook.sh hooks/hooks.json
+            scan/flashteams-scan.pl skills/architecture-review/SKILL.md skills/flash-design/SKILL.md skills/flashteams/SKILL.md
+            skills/roadmap/SKILL.md skills/security-audit/SKILL.md skills/sql-audit/SKILL.md skills/visual-qa/SKILL.md)],
+        'the Grok CLI flashteams plugin holds the hooks, the skills and the scan helper'
+    );
+    is_deeply(
+        [files_in($GROK_MCP)],
+        [qw(.grok-plugin/plugin.json .mcp.json skills/flashteams-next-task/SKILL.md)],
+        'the Grok CLI flashteams-mcp plugin holds only the MCP server and its skill'
+    );
+    is_deeply(json("$GROK_MCP/.mcp.json"), $MCP_SERVER,
+        'Grok CLI flashteams-mcp bundles the flashteams MCP server, with no token or header');
+}
+
+# No agent loads another's manifest. A Codex plugin has no root plugin.json,
+# which would make Codex skip its hooks, and no mcp.json, which Codex would
+# not read from this layout. Grok CLI reads a root plugin.json first, then
+# .grok-plugin/plugin.json, then .claude-plugin/plugin.json, so its plugins
+# have only their own, and no other agent's plugin has one of Grok CLI's.
 for my $name (qw(flashteams flashteams-mcp)) {
     ok(!-e "$ROOT/$PLUGINS{claude}{$name}/$_", "the Claude Code $name plugin has no $_")
-      for qw(plugin.json mcp.json .codex-plugin);
+      for qw(plugin.json mcp.json .codex-plugin .grok-plugin);
     ok(!-e "$ROOT/$PLUGINS{codex}{$name}/$_", "the Codex $name plugin has no $_")
-      for qw(.claude-plugin plugin.json mcp.json);
+      for qw(.claude-plugin plugin.json mcp.json .grok-plugin);
+    ok(!-e "$ROOT/$PLUGINS{grok}{$name}/$_", "the Grok CLI $name plugin has no $_")
+      for qw(.claude-plugin .codex-plugin plugin.json mcp.json);
 }
 
 # ---------------------------------------------------------------------------
@@ -217,6 +276,8 @@ for my $name (qw(flashteams flashteams-mcp)) {
 #     sh, bash and zsh does nothing, and in PowerShell, which Claude Code
 #     uses on a PC without Git Bash, ends the run there with exit 0. So
 #     there the hooks do nothing, instead of failing on every event.
+#   - Grok CLI does the same, with the same commands: Git Bash when it finds
+#     it, else PowerShell.
 #   - Codex runs commandWindows in PowerShell instead of command. It finds
 #     flashteams.exe the same way the starter does and runs it with
 #     --hook, and it exits 0 without a word when it is not there. It names
@@ -276,6 +337,23 @@ my %HOOKS = (
             Interrupt         => [[undef, 'Interrupt']],
         },
     },
+    # Grok CLI reads nothing a hook prints but a gate's answer, which none of
+    # these is, so none keeps stdout. It has no event for a permission
+    # request, only a notification, and no question tool to watch.
+    grok => {
+        file   => "$GROK/hooks/hooks.json",
+        root   => 'GROK_PLUGIN_ROOT',
+        events => {
+            SessionStart       => [[undef, 'SessionStart']],
+            UserPromptSubmit   => [[undef, 'UserPromptSubmit']],
+            PostToolUse        => [[undef, 'PostToolUse']],
+            PostToolUseFailure => [[undef, 'PostToolUseFailure']],
+            Notification       => [['permission_prompt|idle_prompt', 'Notification']],
+            Stop               => [[undef, 'Stop']],
+            StopFailure        => [[undef, 'StopFailure']],
+            StopCancelled      => [[undef, 'StopCancelled']],
+        },
+    },
 );
 for my $agent (sort keys %HOOKS) {
     my $spec = $HOOKS{$agent};
@@ -294,7 +372,7 @@ for my $agent (sort keys %HOOKS) {
             my $handler = $handlers[0] || {};
             is($handler->{type}, 'command', "$agent $event $name is a command hook");
             my $guard = $keeps_stdout ? $STDOUT_GUARD : $QUIET_GUARD;
-            my $prefix = $agent eq 'claude' ? $POWERSHELL_EXIT : '';
+            my $prefix = $agent eq 'codex' ? '' : $POWERSHELL_EXIT;
             is($handler->{command}, qq{$prefix$guard "\${$spec->{root}}/hooks/flashteams-hook.sh" $agent $name},
                 $keeps_stdout
                 ? "$agent $event $name starts the shared hook through the guard, keeping stdout for its answer"
@@ -315,7 +393,7 @@ for my $agent (sort keys %HOOKS) {
                     "codex $event $name has its Windows command, which runs flashteams.exe --hook codex $name");
             }
             else {
-                ok(!exists $handler->{commandWindows}, "claude $event $name has no Windows command, which Claude Code would not read");
+                ok(!exists $handler->{commandWindows}, "$agent $event $name has no Windows command, which $agent would not read");
             }
             for my $field (qw(command commandWindows)) {
                 next unless defined $handler->{$field};
@@ -324,18 +402,20 @@ for my $agent (sort keys %HOOKS) {
         }
     }
     # The hook's longest run at a session start: the input, the status
-    # event and the briefing, well inside the agent's timeout.
+    # event and the briefing, well inside the agent's timeout. Grok CLI is
+    # not briefed.
     cmp_ok($config->{hooks}{SessionStart}[0]{hooks}[0]{timeout}, '>=', 4,
-        "$agent SessionStart leaves time for the briefing");
+        "$agent SessionStart leaves time for the briefing") unless $agent eq 'grok';
 
     # Which commands keep stdout, read from the file itself.
     my @handlers = map { @{ $_->{hooks} } } map { @{ $config->{hooks}{$_} } } sort keys %{ $config->{hooks} || {} };
     my @keeping = sort map { $_->{command} =~ / (\S+)\z/ ? $1 : '?' }
       grep { $_->{command} !~ m{>/dev/null 2>&1; exit 0'} } @handlers;
-    is_deeply(\@keeping, $agent eq 'claude' ? [sort 'SessionStart', $PERMISSION, keys %ASK] : ['SessionStart'],
-        $agent eq 'claude'
-        ? 'claude: only the session start, the permission check and the asks keep stdout'
-        : 'codex: only the session start keeps stdout');
+    my %keeps = (claude => [sort 'SessionStart', $PERMISSION, keys %ASK], codex => ['SessionStart'], grok => []);
+    is_deeply(\@keeping, $keeps{$agent},
+          $agent eq 'claude' ? 'claude: only the session start, the permission check and the asks keep stdout'
+        : $agent eq 'codex'  ? 'codex: only the session start keeps stdout'
+        :                      'grok: no hook keeps stdout');
 }
 
 # Claude Code's permission check: a PreToolUse hook on the Bash tool, so it
@@ -357,6 +437,14 @@ for my $agent (sort keys %HOOKS) {
     my @codex_permission = grep { $_->{command} =~ /\Q$PERMISSION\E/ } map { @{ $_->{hooks} } } map { @{ $codex->{$_} } }
       sort keys %$codex;
     is(scalar @codex_permission, 0, 'Codex has no permission check');
+
+    # Grok CLI takes a hook's allow only as "not blocked", never as an
+    # approval, so it has no permission check either.
+    my $grok = json("$GROK/hooks/hooks.json")->{hooks};
+    ok(!exists $grok->{PreToolUse}, 'Grok CLI has no hook before a tool runs');
+    my @grok_permission = grep { $_->{command} =~ /\Q$PERMISSION\E/ } map { @{ $_->{hooks} } } map { @{ $grok->{$_} } }
+      sort keys %$grok;
+    is(scalar @grok_permission, 0, 'Grok CLI has no permission check');
 }
 
 # ---------------------------------------------------------------------------
@@ -397,20 +485,22 @@ for my $agent (sort keys %HOOKS) {
             "codex $event on Windows calls no .NET type, which PowerShell's Constrained Language Mode refuses");
     }
 
-    # Claude Code: one command for every system, which starts with the
-    # PowerShell exit. Only that one $( is in it.
-    my $claude = json("$CLAUDE/hooks/hooks.json")->{hooks};
-    for my $handler (map { @{ $_->{hooks} } } map { @{ $claude->{$_} } } sort keys %$claude) {
-        my ($name) = $handler->{command} =~ / (\S+)\z/;
-        is(index($handler->{command}, $POWERSHELL_EXIT), 0, "claude $name starts with the PowerShell exit");
-        is(() = $handler->{command} =~ /\$\(/g, 1, "claude $name has no other command substitution");
+    # Claude Code and Grok CLI: one command for every system, which starts
+    # with the PowerShell exit. Only that one $( is in it.
+    for my $agent (qw(claude grok)) {
+        my $hooks = json($HOOKS{$agent}{file})->{hooks};
+        for my $handler (map { @{ $_->{hooks} } } map { @{ $hooks->{$_} } } sort keys %$hooks) {
+            my ($name) = $handler->{command} =~ / (\S+)\z/;
+            is(index($handler->{command}, $POWERSHELL_EXIT), 0, "$agent $name starts with the PowerShell exit");
+            is(() = $handler->{command} =~ /\$\(/g, 1, "$agent $name has no other command substitution");
+        }
     }
 }
 
 # ---------------------------------------------------------------------------
 # The copies in each plugin match shared/.
 
-for my $plugin ($CLAUDE, $CODEX) {
+for my $plugin ($CLAUDE, $CODEX, $GROK) {
     for my $file (qw(hooks/flashteams-hook.pl hooks/flashteams-hook.sh)) {
         (my $shared = $file) =~ s{^}{shared/};
         is(slurp("$plugin/$file"), slurp($shared), "$plugin/$file matches $shared (run script/sync)");
@@ -418,22 +508,22 @@ for my $plugin ($CLAUDE, $CODEX) {
 }
 is(slurp("$CLAUDE/bin/flashteams"), slurp('shared/bin/flashteams'),
     "$CLAUDE/bin/flashteams matches shared/bin/flashteams (run script/sync)");
-for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
+for my $plugin ($CLAUDE_MCP, $CODEX_MCP, $GROK_MCP) {
     my $skill = 'skills/flashteams-next-task/SKILL.md';
     is(slurp("$plugin/$skill"), slurp("shared/$skill"), "$plugin/$skill matches shared/$skill (run script/sync)");
 }
 
-# The audit skills and the scan helper they run: the same in both agents'
-# flashteams plugins, and in neither MCP plugin.
+# The audit skills and the scan helper they run: the same in every agent's
+# flashteams plugin, and in no MCP plugin.
 my @AUDITS = qw(security-audit sql-audit architecture-review);
-for my $plugin ($CLAUDE, $CODEX) {
+for my $plugin ($CLAUDE, $CODEX, $GROK) {
     for my $file ('scan/flashteams-scan.pl', map { "skills/$_/SKILL.md" } @AUDITS) {
         is(slurp("$plugin/$file"), slurp("shared/$file"), "$plugin/$file matches shared/$file (run script/sync)");
     }
     ok(-x "$ROOT/$plugin/scan/flashteams-scan.pl", "$plugin: the scan helper is executable");
 }
 ok(-x "$ROOT/shared/scan/flashteams-scan.pl", 'shared/scan/flashteams-scan.pl is executable');
-for my $plugin ($CLAUDE_MCP, $CODEX_MCP) {
+for my $plugin ($CLAUDE_MCP, $CODEX_MCP, $GROK_MCP) {
     ok(!-e "$ROOT/$plugin/scan", "$plugin has no scan helper");
     ok(!-e "$ROOT/$plugin/skills/$_", "$plugin has no $_ skill") for @AUDITS;
 }
@@ -451,7 +541,8 @@ like(slurp('shared/scan/flashteams-scan.pl'), qr{\A#!/usr/bin/perl\n}, 'the scan
     my $skill = 'skills/flashteams/SKILL.md';
     my $shared = slurp("shared/$skill");
     is(slurp("$CODEX/$skill"), $shared, "$CODEX/$skill matches shared/$skill (run script/sync)");
-    unlike($shared, qr/allowed-tools/, 'the Codex skill has no Claude Code field');
+    is(slurp("$GROK/$skill"), $shared, "$GROK/$skill matches shared/$skill (run script/sync)");
+    unlike($shared, qr/allowed-tools/, 'the Codex and Grok CLI skill has no Claude Code field');
 
     my $copy = slurp("$CLAUDE/$skill");
     my ($line) = $copy =~ /\A---\n(?:[^\n]+\n)*?allowed-tools: ([^\n]*)\n(?:[^\n]+\n)*?---\n/;

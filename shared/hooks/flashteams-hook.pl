@@ -5,9 +5,11 @@
 #
 #   perl flashteams-hook.pl <agent> <hook-event>
 #
-# <agent> is claude or codex, and <hook-event> is the agent's own name for
-# the hook that fired, such as Stop. The agent writes the hook's input, one
-# JSON object, on stdin.
+# <agent> is claude, codex or grok, and <hook-event> is the agent's own name
+# for the hook that fired, such as Stop. The agent writes the hook's input,
+# one JSON object, on stdin. Grok CLI can also run Claude Code's plugins'
+# hooks, which name claude: those Grok CLI runs, as its GROK_HOOK_EVENT says,
+# do nothing, as Grok CLI's own plugin reports for it.
 #
 # The hook turns that input into one Flash Console agent event (protocol
 # version 1, described in the README) and writes it as one line of JSON to
@@ -58,7 +60,7 @@ use JSON::PP ();
 use Socket qw(SOCK_STREAM);
 use Time::HiRes ();
 
-our $VERSION = '1.11.0';
+our $VERSION = '1.11.1';
 
 use constant {
     PROTOCOL_VERSION => 1,
@@ -151,7 +153,10 @@ sub main {
 sub run {
     my ($agent, $hook) = @_;
     $agent = lc($agent // '');
-    return unless $agent eq 'claude' || $agent eq 'codex';
+    return unless $agent eq 'claude' || $agent eq 'codex' || $agent eq 'grok';
+    # Grok CLI running Claude Code's plugin: Grok CLI's own plugin reports
+    # for it, so the event is not sent twice, nor as Claude Code's.
+    return if $agent eq 'claude' && length($ENV{GROK_HOOK_EVENT} // '');
 
     my $socket = socket_path();
     return unless defined $socket && socket_is_ours($socket);
@@ -163,16 +168,20 @@ sub run {
     $hook = $in->text('hook_event_name', NAME_LIMIT) unless defined $hook && length $hook;
     return unless defined $hook;
 
-    my $event = $agent eq 'claude' ? claude_event($hook, $in) : codex_event($hook, $in);
+    my $event =
+        $agent eq 'claude' ? claude_event($hook, $in)
+      : $agent eq 'codex'  ? codex_event($hook, $in)
+      :                      grok_event($hook, $in);
     if ($event) {
         my $line = build_line($agent, $event, $in);
         send_line($socket, $line) if defined $line;
     }
 
     # The status event goes first, so Flash Console hears of the session
-    # however long the briefing takes.
+    # however long the briefing takes. Grok CLI ignores what a session
+    # start's hook prints, so it is not asked for.
     my $briefing;
-    $briefing = ask_briefing($socket, $agent, $in) if $ANSWER && $hook eq 'SessionStart';
+    $briefing = ask_briefing($socket, $agent, $in) if $ANSWER && $hook eq 'SessionStart' && $agent ne 'grok';
 
     drain_input() unless $at_end;
     return $briefing;
@@ -355,6 +364,55 @@ sub codex_event {
     return;
 }
 
+# Grok CLI's hooks, named as Claude Code's are. Grok CLI writes most of its
+# fields twice, in its own camelCase and as Claude Code names them; either is
+# read. It asks for permission only in a notification.
+sub grok_event {
+    my ($hook, $in) = @_;
+    my $last = sub { $in->excerpt('last_assistant_message') // $in->excerpt('lastAssistantMessage') };
+
+    if ($hook eq 'SessionStart') {
+        return session_event($in);
+    }
+    if ($hook eq 'UserPromptSubmit') {
+        return { event => 'prompt_submit', query => $in->excerpt('prompt') };
+    }
+    if ($hook eq 'PostToolUse' || $hook eq 'PostToolUseFailure') {
+        return tool_event('tool_complete', $in);
+    }
+    if ($hook eq 'Notification') {
+        my $type = $in->text('notification_type', NAME_LIMIT) // $in->text('notificationType', NAME_LIMIT) // '';
+        my %kind = (permission_prompt => 'permission_request', idle_prompt => 'idle_prompt');
+        return unless $kind{$type};
+        return { event => $kind{$type}, summary => $in->excerpt('message') };
+    }
+    if ($hook eq 'Stop') {
+        # A turn's own end says end_turn; Grok CLI also fires Stop as the
+        # session closes, which ends no turn.
+        my $reason = $in->text('reason', NAME_LIMIT);
+        return if defined $reason && $reason ne 'end_turn';
+        return { event => 'stop', response => $last->() };
+    }
+    if ($hook eq 'StopFailure') {
+        return {
+            event         => 'stop_failure',
+            error_type    => $in->text('error', ID_LIMIT),
+            error_message => $last->() // $in->excerpt('errorDetails'),
+        };
+    }
+    if ($hook eq 'StopCancelled') {
+        # A turn that ran out of turns or stopped getting anywhere failed;
+        # one the person stopped, or whose permission they refused, was
+        # interrupted.
+        my $reason = $in->text('reason', NAME_LIMIT) // '';
+        if ($reason eq 'max_turns' || $reason eq 'no_progress') {
+            return { event => 'stop_failure', error_type => $reason, error_message => $last->() };
+        }
+        return { event => 'stop', interrupted => JSON::PP::true };
+    }
+    return;
+}
+
 # Why the session started, in the agent's own word (such as startup, resume,
 # clear or compact), passed on as given. Flash Console uses it to tell the
 # same pane moving to a new conversation from another agent starting inside
@@ -509,20 +567,24 @@ sub build_line {
         plugin_version => $VERSION,
     );
 
-    # Claude Code runs its hooks inside its own process in the tab, so its
-    # environment names the pane. Codex runs hooks in a shared background
-    # server whose environment belongs to whichever terminal started it, so
-    # a Codex event never names a pane.
-    if ($agent eq 'claude') {
+    # Claude Code and Grok CLI run their hooks inside their own process in
+    # the tab, so their environment names the pane. Codex runs hooks in a
+    # shared background server whose environment belongs to whichever
+    # terminal started it, so a Codex event never names a pane.
+    if ($agent ne 'codex') {
         $line{pane} = clean($ENV{FLASH_CONSOLE_PANE}, ID_LIMIT);
     }
 
-    # Both agents name the subagent a hook fired in with agent_id, and leave
-    # it out for the main agent. An id too long to send still marks the
-    # event as a subagent's.
+    # Claude Code and Codex name the subagent a hook fired in with agent_id,
+    # and leave it out for the main agent. An id too long to send still
+    # marks the event as a subagent's. Grok CLI names only the kind of
+    # subagent, which may outlive the turn that started it.
     if ($in->nonempty_string('agent_id')) {
         $line{subagent}    = JSON::PP::true;
         $line{subagent_id} = $in->text('agent_id', ID_LIMIT);
+    }
+    elsif ($agent eq 'grok' && $in->nonempty_string('subagentType')) {
+        $line{subagent} = JSON::PP::true;
     }
 
     for my $key (keys %line) {
