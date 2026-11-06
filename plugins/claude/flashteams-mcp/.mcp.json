@@ -2,7 +2,10 @@
   "mcpServers": {
     "flashteams": {
       "type": "http",
-      "url": "https://flashteams-mcp-server.nisitha.workers.dev/mcp"
+      "url": "https://flashteams-mcp-server.nisitha.workers.dev/mcp",
+      "headers": {
+        "X-FlashTeams-Conversation": "pane:${FLASH_CONSOLE_PANE:-}"
+      }
     }
   }
 }

@@ -30,7 +30,7 @@ my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
 my $GROK       = $PLUGINS{grok}{flashteams};
 my $GROK_MCP   = $PLUGINS{grok}{'flashteams-mcp'};
-my $RELEASE = '1.11.1';
+my $RELEASE = '1.11.2';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 
@@ -107,8 +107,14 @@ is($hook_version, $RELEASE, "the hook is version $RELEASE");
         [qw(.claude-plugin/plugin.json .mcp.json skills/flashteams-next-task/SKILL.md)],
         'the Claude Code flashteams-mcp plugin holds only the MCP server and its skill'
     );
-    is_deeply(json("$CLAUDE_MCP/.mcp.json"), $MCP_SERVER,
-        'Claude Code flashteams-mcp bundles the flashteams MCP server, with no token or header');
+    # The one header names the conversation: the Flash Console pane the
+    # agent runs in, the name Flash Console's own flashteams command uses,
+    # so the server keeps the pane's project when Claude Code reconnects. It
+    # is "pane:" outside Flash Console, which names none. No token.
+    is_deeply(json("$CLAUDE_MCP/.mcp.json"),
+        { mcpServers => { flashteams => { %{ $MCP_SERVER->{mcpServers}{flashteams} },
+            headers => { 'X-FlashTeams-Conversation' => 'pane:${FLASH_CONSOLE_PANE:-}' } } } },
+        'Claude Code flashteams-mcp bundles the flashteams MCP server, with no token, naming its pane');
 }
 
 # ---------------------------------------------------------------------------
