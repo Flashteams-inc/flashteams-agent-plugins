@@ -23,10 +23,14 @@ flashteams, then Authenticate; Codex: `codex mcp login flashteams`) and stop.
    `session_id` when you know it, the `folder` and the git `branch`, so the
    task's roadmap feature shows this conversation working on it, when the
    tools list `session`.
+   A subagent working tasks beside others adds its own `worker` name to
+   `session`, so its time counts apart from yours.
 3. **Start before working.** Call `update_task` with action `start` before
    you change anything, so the time you spend is measured.
 4. **Do the work** the task asks for, and run the project's checks.
-5. **Close with a handoff.** Call `update_task` with action `close` (or
+5. **Close with a handoff, as soon as the work is done.** The clock runs
+   until the task closes, and a worker's time is split between the tasks it
+   has in progress at once. Call `update_task` with action `close` (or
    `submit_for_review` when someone has to review it) and write the note in
    plain language: what you did, what is done and what is left, where to
    pick up, how to check it works, and anything to watch out for. Leave

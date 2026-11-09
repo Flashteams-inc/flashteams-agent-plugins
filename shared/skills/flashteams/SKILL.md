@@ -81,6 +81,12 @@ pass it to `track_work`: your agent (`claude` or `codex`), your own
 when you do not know it), the `folder` you work in and its git `branch`.
 Pass it only when `flashteams help` lists `--session` for the tool.
 
+A task's clock runs until the task closes, so close each task when its work
+is done and start the next when you begin it: a worker's time is split
+between the tasks it has in progress at once. Subagents working tasks side
+by side each pass the same `session` with their own `worker` name (for
+example `"worker":"migrator-2"`), so each one's time counts in full.
+
 ```sh
 flashteams load_task --task_id <task id> \
   --session '{"agent":"claude","session_id":"<session id>","folder":"<folder>","branch":"<branch>"}'
