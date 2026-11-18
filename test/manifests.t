@@ -30,7 +30,7 @@ my $CODEX      = $PLUGINS{codex}{flashteams};
 my $CODEX_MCP  = $PLUGINS{codex}{'flashteams-mcp'};
 my $GROK       = $PLUGINS{grok}{flashteams};
 my $GROK_MCP   = $PLUGINS{grok}{'flashteams-mcp'};
-my $RELEASE = '1.11.2';
+my $RELEASE = '1.12.0';
 my $MCP_URL = 'https://flashteams-mcp-server.nisitha.workers.dev/mcp';
 my $MCP_SERVER = { mcpServers => { flashteams => { type => 'http', url => $MCP_URL } } };
 

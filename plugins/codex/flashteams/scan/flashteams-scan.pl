@@ -15,17 +15,24 @@
 #   perl flashteams-scan.pl send --out <work folder> [--product-id <id>]
 #       [--organization-id <id>]
 #
-# The scanners are gitleaks (secrets), opengrep (FlashTeams' code rules;
-# semgrep in its place when opengrep is not installed) and Trivy
-# (infrastructure files, and dependency vulnerabilities in full mode).
-# install downloads the versions FlashTeams' own scanner uses, checked
-# against pinned checksums, into a folder of their own.
+# The scanners are gitleaks (secrets in the files, and in full mode in the
+# git history), opengrep (FlashTeams' code rules; semgrep in its place when
+# opengrep is not installed) and Trivy (infrastructure files and dependency
+# vulnerabilities, in full mode). install downloads one pinned version of
+# each, checked against a pinned checksum, into a folder of their own, and
+# notes what it installed; a scan says when a scanner is any other build.
 #
 # Rules this program keeps, whatever happens:
 #   - a secret's value is never printed or written: gitleaks runs with
 #     --redact, its Secret, Match and Line fields are dropped as they are
 #     read, the line text of a secret is never kept, and show prints
 #     [hidden] in its place;
+#   - the repository does not decide what is checked: no scanner reads
+#     its settings from it, and its ignore files and comments are not
+#     obeyed wherever the scanner can be told so. The ones a scanner obeys
+#     regardless (.gitleaksignore, trivy:ignore comments, and a
+#     .semgrepignore when semgrep stands in) are counted and said, as are
+#     the ones passed by;
 #   - the scanners' own reports, which quote the code, are deleted once
 #     read; the work folder keeps only scan.json, tools.json,
 #     findings.json, hidden.json and payload.json, which hold no code;
@@ -66,7 +73,7 @@ use JSON::PP ();
 use POSIX ();
 use Time::HiRes ();
 
-our $VERSION = '1.11.2';
+our $VERSION = '1.12.0';
 
 my @SEVERITIES = qw(critical high medium low info);
 my %SEVERITY_RANK = map { $SEVERITIES[$_] => $_ } 0 .. $#SEVERITIES;
@@ -99,10 +106,11 @@ my $MADE_UP = qr/your[_-]|<[^>]{1,40}>|\$\{|example|placeholder|changeme|dummy|f
 # line text is never kept and show hides it.
 my $CREDENTIAL_RULE = qr/hard-?coded|credential/i;
 
-# The scanners, pinned to the versions FlashTeams' own scanner uses. gitleaks
-# and Trivy publish a checksums file with each release, and these are its
-# sums; opengrep publishes signatures instead, so its sums are of the
-# reviewed downloads, as the scanner's Dockerfile pins them.
+# The scanners, each pinned to one release. gitleaks and Trivy publish a
+# checksums file with each release, and these are its sums; opengrep
+# publishes signatures instead, so its sums are the ones GitHub records for
+# the release's files. FlashTeams' own scanner pins its scanners in its
+# Dockerfile: move the two together.
 my %PINS = (
     gitleaks => {
         version => '8.30.1',
@@ -117,27 +125,27 @@ my %PINS = (
         },
     },
     opengrep => {
-        version => '1.30.0',
-        page    => 'https://github.com/opengrep/opengrep/releases/tag/v1.30.0',
-        base    => 'https://github.com/opengrep/opengrep/releases/download/v1.30.0/',
+        version => '2.0.0',
+        page    => 'https://github.com/opengrep/opengrep/releases/tag/v2.0.0',
+        base    => 'https://github.com/opengrep/opengrep/releases/download/v2.0.0/',
         member  => undef,    # the download is the program itself
         assets  => {
-            'darwin-arm64' => [ 'opengrep_osx_arm64',         '0f5bc3dec09d995c61331a4017b856ede508f90d95b018d95f1dc6166be89fdd' ],
-            'darwin-x64'   => [ 'opengrep_osx_x86',           '650772a849a2986880982b7dea0371f96a75d354de95f94e8c1a2e6f8f6262d1' ],
-            'linux-x64'    => [ 'opengrep_manylinux_x86',     '35779bdd72e92129c8df2a77f0c55e8c08356801ea92591ef32108d6b28d564c' ],
-            'linux-arm64'  => [ 'opengrep_manylinux_aarch64', 'a5d5a4a58ba5d46ff51e921663da1c2bba38f4b03987f4aeec87f16c6ad3ecae' ],
+            'darwin-arm64' => [ 'opengrep_osx_arm64',     'b51b3d83f165a2e0934497b8f1b08abb1c3041ef20ef911c97e04cb39af1ad55' ],
+            'darwin-x64'   => [ 'opengrep_osx_x86',       '51d2f918d7aad0afc1426bb4fbf56e32fc70c3ffd5ddb78e32e7d61e51c029a2' ],
+            'linux-x64'    => [ 'opengrep_linux_x86',     '37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0' ],
+            'linux-arm64'  => [ 'opengrep_linux_aarch64', '6257b65423a744b704af2ff9beeb8f222c2f6925236af386b56b031d4c06d6d8' ],
         },
     },
     trivy => {
-        version => '0.74.0',
-        page    => 'https://github.com/aquasecurity/trivy/releases/tag/v0.74.0',
-        base    => 'https://github.com/aquasecurity/trivy/releases/download/v0.74.0/',
+        version => '0.76.2',
+        page    => 'https://github.com/aquasecurity/trivy/releases/tag/v0.76.2',
+        base    => 'https://github.com/aquasecurity/trivy/releases/download/v0.76.2/',
         member  => 'trivy',
         assets  => {
-            'darwin-arm64' => [ 'trivy_0.74.0_macOS-ARM64.tar.gz', '1caada5e0e2091909357c7525d3aa76f4b660b13821bc143b190c7483e31cc11' ],
-            'darwin-x64'   => [ 'trivy_0.74.0_macOS-64bit.tar.gz', '472816f6888dda689d075c30254d4210b4d1035acf365aa72332f584c2f60485' ],
-            'linux-x64'    => [ 'trivy_0.74.0_Linux-64bit.tar.gz', '2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a' ],
-            'linux-arm64'  => [ 'trivy_0.74.0_Linux-ARM64.tar.gz', 'b94ce1976bbf3c15b514b605ee88be7c6d94a29be2302847ff01cb794d47aad5' ],
+            'darwin-arm64' => [ 'trivy_0.76.2_macOS-ARM64.tar.gz', 'ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8' ],
+            'darwin-x64'   => [ 'trivy_0.76.2_macOS-64bit.tar.gz', 'e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b' ],
+            'linux-x64'    => [ 'trivy_0.76.2_Linux-64bit.tar.gz', 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf' ],
+            'linux-arm64'  => [ 'trivy_0.76.2_Linux-ARM64.tar.gz', 'ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3' ],
         },
     },
 );
@@ -145,6 +153,9 @@ my @INSTALLABLE = qw(gitleaks opengrep trivy);
 
 my $SELF = abs_path(__FILE__) // __FILE__;
 my $BUNDLE_MARK = '.flashteams-rules.json';
+# The name opengrep is given for its ignore file, so that it reads none.
+my $NO_IGNORE_FILE = '.flashteams-scan-reads-no-ignore-file';
+my $INSTALLED_MARK = '.flashteams-installed.json';
 
 
 sub main {
@@ -348,6 +359,39 @@ sub find_tool {
     return $path ? { path => $path, source => 'PATH' } : undef;
 }
 
+# What install put in the tools folder: each scanner's version and the
+# checksum of its program, written once its download matched its pin.
+sub installed_marks {
+    my $marks = read_json(tools_dir() . "/$INSTALLED_MARK", 1024 * 1024);
+    return ref $marks eq 'HASH' ? $marks : {};
+}
+
+# Whether a scanner is the checked build: the pinned version, as install
+# left it in the tools folder. One from the PATH or Homebrew, another
+# version, or a program changed since install is not.
+my %CHECKED;
+sub checked_build {
+    my ($name, $tool) = @_;
+    return 0 unless $tool && $PINS{$name} && $tool->{source} eq 'tools folder';
+    return $CHECKED{ $tool->{path} } //= do {
+        my $mark = installed_marks()->{$name};
+        ref $mark eq 'HASH' && ($mark->{version} // '') eq $PINS{$name}{version}
+          && ($mark->{sha256} // '') =~ /\A[0-9a-f]{64}\z/ && sha256_file($tool->{path}) eq $mark->{sha256} ? 1 : 0;
+    };
+}
+
+# For a tool's note when its scanner is not the checked build, and '' when
+# it is. The scan still runs: the note and the summary say what ran.
+sub build_note {
+    my ($ctx, $name, $tool, $version) = @_;
+    return '' if checked_build($name, $tool);
+    my $where = $tool->{source} eq 'PATH' ? 'the PATH' : 'the tools folder';
+    $ctx->{unchecked}{$name} = 1;
+    return "semgrep from $where in place of opengrep, not a checked build" if $name eq 'semgrep';
+    my $pin = $PINS{$name}{version};
+    return "not the checked build: from $where" . (($version // '') ne $pin ? ", and the checked version is $pin" : '');
+}
+
 my $SCRATCH;
 sub scratch {
     $SCRATCH //= tempdir('flashteams-scan-XXXXXX', TMPDIR => 1, CLEANUP => 1);
@@ -523,6 +567,7 @@ sub cmd_doctor {
             source  => $tool ? $tool->{source} : undef,
             version => $version,
             pinned  => $PINS{$name} ? $PINS{$name}{version} : undef,
+            checked => !$PINS{$name} ? undef : checked_build($name, $tool) ? JSON::PP::true : JSON::PP::false,
         };
     }
     my %row = map { $_->{name} => $_ } @rows;
@@ -539,6 +584,11 @@ sub cmd_doctor {
         $choices{$name} = \@ways;
     }
     my $semgrep_stands_in = !$row{opengrep}{found} && $row{semgrep}{found};
+    # Here, but not the build install checks: from the PATH or Homebrew,
+    # another version, or changed since install.
+    my @unchecked = grep { $row{$_}{found} && !$row{$_}{checked} } @INSTALLABLE;
+    my @replaceable = grep { $can_install && $PINS{$_}{assets}{"$os-$arch"} } @unchecked;
+    my $install_checked = @replaceable ? qq{perl "$script" install @replaceable} : undef;
 
     if ($opt->{json}) {
         print json_codec()->pretty->indent_length(2)->encode({
@@ -547,6 +597,8 @@ sub cmd_doctor {
             install_works    => $can_install ? JSON::PP::true : JSON::PP::false,
             tools            => \@rows,
             missing          => \@missing,
+            unchecked        => \@unchecked,
+            install_checked  => $install_checked,
             semgrep_for_opengrep => $semgrep_stands_in ? JSON::PP::true : JSON::PP::false,
             install          => \%choices,
             install_all      => @missing && $can_install ? qq{perl "$script" install @missing} : undef,
@@ -560,9 +612,10 @@ sub cmd_doctor {
     for my $row (@rows) {
         my $status;
         if ($row->{found}) {
-            $status = sprintf('%-8s ready (%s%s)', $row->{version} // '?', $row->{source},
-                $row->{source} eq 'PATH' ? ": $row->{path}" : '');
-            $status .= ". FlashTeams uses $row->{pinned}" if $row->{pinned} && ($row->{version} // '') ne $row->{pinned};
+            $status = sprintf('%-8s ready (%s%s%s)', $row->{version} // '?', $row->{source},
+                $row->{source} eq 'PATH' ? ": $row->{path}" : '',
+                !$row->{pinned} ? '' : $row->{checked} ? ', checked' : ', not checked');
+            $status .= ". The checked version is $row->{pinned}" if $row->{pinned} && ($row->{version} // '') ne $row->{pinned};
         }
         elsif ($row->{name} eq 'semgrep') {
             $status = 'not installed (only needed when opengrep is missing)';
@@ -574,6 +627,10 @@ sub cmd_doctor {
     }
     print "  semgrep will run FlashTeams' code rules in place of opengrep.\n" if $semgrep_stands_in;
     print "  git is missing, and every scan needs it.\n" unless $row{git}{found};
+    if (@unchecked) {
+        print "Not checked against a pinned checksum: @unchecked. A scan runs with them and says so.\n";
+        print "To replace them with the checked versions: $install_checked\n" if $install_checked;
+    }
     if (!@missing) {
         print "Every scanner is installed.\n";
         return 0;
@@ -585,9 +642,9 @@ sub cmd_doctor {
         print qq{All at once: perl "$script" install @missing\n};
     }
     my @brewable = grep { $_ ne 'opengrep' } @missing;
-    print "With Homebrew: brew install @brewable\n" if $brew && @brewable;
+    print "With Homebrew (its own latest version, not checked against a pin): brew install @brewable\n" if $brew && @brewable;
     if ($can_install) {
-        print 'install downloads the version FlashTeams uses into ' . chars(tools_dir())
+        print 'install downloads the pinned version into ' . chars(tools_dir())
           . " and checks it against a pinned checksum. Nothing else on this computer changes.\n";
     }
     elsif ($os eq 'windows') {
@@ -689,6 +746,9 @@ sub cmd_install {
             $failed++;
             next;
         }
+        my $marks = installed_marks();
+        $marks->{$tool} = { version => $pin->{version}, sha256 => sha256_file($target), installed => iso_now() };
+        write_json("$dir/$INSTALLED_MARK", $marks);
         print "$tool $version: installed in " . chars($dir) . "\n";
     }
     return $failed ? 1 : 0;
@@ -915,9 +975,19 @@ sub cmd_run {
         visible       => visible_files($root, $path),
         findings      => [],
         tools         => [],
+        suppressions  => [],
+        unchecked     => {},
         started       => iso_now(),
     };
+    # The scanners' settings come from here, never from the repository: an
+    # empty file for each ignore list and for Trivy's settings, and
+    # gitleaks' built-in rules by name.
+    $ctx->{empty} = "$ctx->{raw}/empty";
+    write_bytes($ctx->{empty}, '');
+    $ctx->{gitleaks_default} = "$ctx->{raw}/gitleaks-default.toml";
+    write_bytes($ctx->{gitleaks_default}, "[extend]\nuseDefault = true\n");
     run_gitleaks($ctx);
+    run_gitleaks_history($ctx) if $kind eq 'security';
     run_code_rules($ctx);
     if ($kind eq 'security') {
         run_trivy_config($ctx);
@@ -946,6 +1016,8 @@ sub cmd_run {
         started       => $ctx->{started},
         finished      => iso_now(),
         findings      => scalar(@findings),
+        suppressions  => $ctx->{suppressions},
+        unchecked     => [ sort keys %{ $ctx->{unchecked} } ],
     });
     print_summary($ctx, $out, $rules_version, \@findings);
     return 0;
@@ -1000,6 +1072,39 @@ sub visible_files {
     fail(1, 'git could not list the files: ' . first_error($result->{stderr})) if $result->{status} != 0;
     my %visible = map { $_ => 1 } grep { $_ ne '' } split /\0/, $result->{stdout};
     return \%visible;
+}
+
+# What the repository itself tells a scanner to leave out: an ignore file,
+# a settings file, or comments on the lines. An audit does not let the code
+# it checks decide what is checked, so each scanner is told not to obey
+# them wherever it can be told; where it cannot, the suppression is obeyed
+# and said. Either way it is recorded, for the summary and the report.
+sub add_suppression {
+    my ($ctx, $tool, $what, $count, $obeyed) = @_;
+    return '' unless $count;
+    push @{ $ctx->{suppressions} },
+      { tool => $tool, what => $what, count => 0 + $count, obeyed => $obeyed ? JSON::PP::true : JSON::PP::false };
+    return $obeyed ? "obeyed the repository's $what ($count), which it cannot be told to skip" : '';
+}
+
+# How many files git shows in the scanned folder have one of these names.
+sub files_named {
+    my ($ctx, @names) = @_;
+    my %name = map { $_ => 1 } @names;
+    my @found = grep { m{([^/]+)\z} && $name{$1} } keys %{ $ctx->{visible} };
+    return scalar @found;
+}
+
+# How many lines in the files git shows hold one of these words, such as
+# the comment that tells a scanner to skip a line.
+sub count_marks {
+    my ($ctx, @words) = @_;
+    my $result = git($ctx->{root}, 'grep', '-I', '-c', '-z', '--untracked', '-F', '-w', (map { ('-e', $_) } @words),
+        '--', $ctx->{path} eq '' ? '.' : bytes_of($ctx->{path}));
+    return 0 unless $result->{status} == 0;
+    my $lines = 0;
+    $lines += $1 while $result->{stdout} =~ /\0([0-9]+)\n/g;
+    return $lines;
 }
 
 sub add_tool {
@@ -1073,8 +1178,9 @@ sub run_gitleaks {
         return;
     }
     my $version = tool_version($tool->{path}, 'gitleaks');
+    my $build = build_note($ctx, 'gitleaks', $tool, $version);
     my $own = $ctx->{rules} && -f "$ctx->{rules}/gitleaks/flashteams.toml" ? "$ctx->{rules}/gitleaks/flashteams.toml" : undef;
-    my @passes = ([ 'default', undef ], $own ? [ 'flashteams', $own ] : ());
+    my @passes = ([ 'default', $ctx->{gitleaks_default} ], $own ? [ 'flashteams', $own ] : ());
     my (@notes, @found);
     my $ran = 0;
     for my $pass (@passes) {
@@ -1082,11 +1188,7 @@ sub run_gitleaks {
         my $report = "$ctx->{raw}/gitleaks-$name.json";
         my $err = "$ctx->{raw}/gitleaks-$name.err";
         my $result = run_program(
-            command => [
-                $tool->{path}, 'dir', $ctx->{target}, '--report-format', 'json', '--report-path', $report, '--no-banner',
-                '--exit-code', '0', '--max-target-megabytes', '5', '--log-level', 'error', '--redact',
-                ($config ? ('--config', $config) : ()),
-            ],
+            command => [ $tool->{path}, 'dir', $ctx->{target}, gitleaks_options($ctx, $report, $config) ],
             cwd => $ctx->{root}, env => tool_env($ctx), stderr => $err, timeout => scan_timeout(),
         );
         my $data = read_json($report, MAX_REPORT_RAW);
@@ -1116,10 +1218,148 @@ sub run_gitleaks {
         else {
             push @notes, plural(scalar @kept, 'finding');
         }
+        push @notes, grep { $_ ne '' } gitleaks_suppressions($ctx);
     }
+    push @notes, $build if $build ne '';
     push @{ $ctx->{findings} }, @kept;
+    # For the history pass: the secrets still in the files, by rule and file.
+    $ctx->{in_files}{"$_->{rule}\n" . ($_->{path} // '')} = 1 for @kept;
     add_tool($ctx, 'gitleaks', $version, $ran ? 'ran' : 'failed', join('; ', @notes));
     return;
+}
+
+# The options every gitleaks pass runs with. The rules are always named
+# (its built-in ones, or FlashTeams'), so a .gitleaks.toml in the repository
+# is not read; gitleaks:allow comments do not hide a line; and the ignore
+# file is an empty one from here. gitleaks still reads a .gitleaksignore at
+# the top of the folder it scans, whatever it is told.
+sub gitleaks_options {
+    my ($ctx, $report, $config) = @_;
+    return (
+        '--report-format', 'json', '--report-path', $report, '--no-banner', '--exit-code', '0',
+        '--max-target-megabytes', '5', '--log-level', 'error', '--redact', '--config', $config,
+        '--ignore-gitleaks-allow', '--gitleaks-ignore-path', $ctx->{empty},
+    );
+}
+
+# The repository's own ways to hide a secret from gitleaks, and what
+# became of each. Returns the notes for the ones obeyed.
+sub gitleaks_suppressions {
+    my ($ctx) = @_;
+    my @notes;
+    push @notes, add_suppression($ctx, 'gitleaks', 'gitleaks settings file (.gitleaks.toml)', files_named($ctx, '.gitleaks.toml'), 0);
+    push @notes, add_suppression($ctx, 'gitleaks', 'gitleaks:allow comments', count_marks($ctx, 'gitleaks:allow'), 0);
+    push @notes, add_suppression($ctx, 'gitleaks', '.gitleaksignore entries', gitleaksignore_entries($ctx, $ctx->{path}), 1);
+    return @notes;
+}
+
+# The entries of the .gitleaksignore at the top of a folder, which gitleaks
+# reads whenever it scans that folder.
+sub gitleaksignore_entries {
+    my ($ctx, $folder) = @_;
+    my $file = "$ctx->{root}/" . bytes_of($folder eq '' ? '' : "$folder/") . '.gitleaksignore';
+    return 0 unless -f $file;
+    my $text = chars(read_bytes($file, MAX_READ) // '');
+    return scalar(grep { /\S/ && !/\A\s*#/ } split /\r?\n/, $text);
+}
+
+# The git history, in a full scan: secrets in commits that are no longer in
+# the files. A key taken out of the code is still in every clone, and still
+# works until it is revoked. gitleaks' built-in rules only.
+sub run_gitleaks_history {
+    my ($ctx) = @_;
+    my $name = 'gitleaks-history';
+    my $tool = find_tool('gitleaks');
+    my $version = $tool ? tool_version($tool->{path}, 'gitleaks') : undef;
+    if ($ctx->{mode} eq 'quick') {
+        add_tool($ctx, $name, $version, 'skipped', 'full mode only: the git history is searched for secrets in a full scan');
+        return;
+    }
+    if (!$tool) {
+        add_tool($ctx, $name, undef, 'missing', missing_note('gitleaks'));
+        return;
+    }
+    if (!defined git_line($ctx->{root}, 'rev-parse', '-q', '--verify', 'HEAD^{commit}')) {
+        add_tool($ctx, $name, $version, 'skipped', 'this repository has no commits yet');
+        return;
+    }
+    my $build = build_note($ctx, 'gitleaks', $tool, $version);
+    my $report = "$ctx->{raw}/gitleaks-history.json";
+    my $err = "$ctx->{raw}/gitleaks-history.err";
+    my $result = run_program(
+        command => [ $tool->{path}, 'git', '.', gitleaks_options($ctx, $report, $ctx->{gitleaks_default}) ],
+        cwd => $ctx->{root}, env => tool_env($ctx), stderr => $err, timeout => scan_timeout(),
+    );
+    my $data = read_json($report, MAX_REPORT_RAW);
+    my $why = first_error(read_bytes($err));
+    unlink($report, $err);
+    if ($result->{timed_out} || ref $data ne 'ARRAY') {
+        add_tool($ctx, $name, $version, 'failed',
+            $result->{timed_out} ? 'ran out of time on this history' : 'did not finish' . ($why ne '' ? ": $why" : " (exit $result->{status})"));
+        return;
+    }
+    my $prefix = $ctx->{path} eq '' ? '' : "$ctx->{path}/";
+    my (@found, %blame);
+    my $still = 0;
+    for my $raw (@$data) {
+        next unless ref $raw eq 'HASH';
+        delete @$raw{qw(Secret Match Line Message Author Email)};
+        my ($file, $commit, $line) = ($raw->{File}, $raw->{Commit}, positive($raw->{StartLine}));
+        next unless defined $file && !ref $file && $file ne '' && defined $commit && !ref $commit && $commit =~ /\A[0-9a-f]{40,64}\z/;
+        $file =~ s{\\}{/}g;
+        next unless index($file, $prefix) == 0;
+        my $id = defined $raw->{RuleID} && !ref $raw->{RuleID} ? "$raw->{RuleID}" : 'secret';
+        # Still on its line in the last commit, and found there by the scan
+        # of the files: that finding stands for it.
+        if (defined $line && $ctx->{in_files}{ clip("gitleaks:$id", MAX_RULE) . "\n$file" }) {
+            $blame{$file} //= lines_by_origin($ctx, $file, scalar(keys %blame));
+            if ($blame{$file}{"$commit:$line"}) {
+                $still++;
+                next;
+            }
+        }
+        my $date = defined $raw->{Date} && !ref $raw->{Date} && $raw->{Date} =~ /\A([0-9]{4}-[0-9]{2}-[0-9]{2})/ ? " on $1" : '';
+        push @found, {
+            category       => 'secret',
+            tool           => 'gitleaks',
+            rule           => clip("gitleaks:$id", MAX_RULE),
+            severity       => 'high',
+            path           => $file,
+            line           => undef,
+            title          => clip('Secret in the git history: ' . words_of($id) . '.', MAX_TITLE),
+            detail         => 'Added in commit ' . substr($commit, 0, 12) . $date . (defined $line ? ", at line $line of the file as it was then" : '')
+              . '. It is not on that line in the files now (deleted since, or on another branch), but everyone with a copy of the repository can still read it.',
+            recommendation => 'Revoke it with its provider unless that is already done: taking it out of the files, or even out of the history, does not make a leaked key safe.',
+            cwe            => 'CWE-798',
+            _text          => "history $commit:" . ($line // ''),
+            _column        => positive($raw->{StartColumn}) // 0,
+        };
+    }
+    push @{ $ctx->{findings} }, @found;
+    my @notes = ("every commit git has here, gitleaks' own rules", plural(scalar @found, 'finding') . ' not in the files now');
+    push @notes, "$still more still in the files, listed there" if $still;
+    # The history is the whole repository's, so the ignore file gitleaks
+    # reads for it is the one at the root; the scan of the files has
+    # already recorded that one unless it was of a folder.
+    push @notes, grep { $_ ne '' } add_suppression($ctx, $name, '.gitleaksignore entries', gitleaksignore_entries($ctx, ''), 1)
+      if $ctx->{path} ne '';
+    push @notes, 'a shallow clone, so only the commits it holds' if (git_line($ctx->{root}, 'rev-parse', '--is-shallow-repository') // '') eq 'true';
+    push @notes, $build if $build ne '';
+    add_tool($ctx, $name, $version, 'ran', join('; ', @notes));
+    return;
+}
+
+# For a file in the last commit: the commit and line each of its lines
+# first came from, as "commit:line". One git blame a file, for at most 200
+# files, so a long history of leaks cannot make the scan slow.
+sub lines_by_origin {
+    my ($ctx, $file, $asked) = @_;
+    return {} if $asked >= 200;
+    my $result = git($ctx->{root}, 'blame', '--porcelain', 'HEAD', '--', bytes_of($file));
+    return {} unless $result->{status} == 0;
+    my %origin;
+    $origin{"$1:$2"} = 1 while $result->{stdout} =~ /^([0-9a-f]{40,64}) ([0-9]+) [0-9]+(?: [0-9]+)?$/mg;
+    return \%origin;
 }
 
 # One gitleaks finding. The secret is dropped here, before anything else
@@ -1197,6 +1437,7 @@ sub run_code_rules {
         return;
     }
     my $version = tool_version($tool->{path}, $engine);
+    my $build = build_note($ctx, $engine, $tool, $version);
     my @configs = grep { rule_files($_) } map { "$ctx->{rules}/opengrep/$_" } @folders;
     if (!@configs) {
         add_tool($ctx, $engine, $version, 'skipped', 'the FlashTeams rules have no code rules for this scan');
@@ -1211,12 +1452,18 @@ sub run_code_rules {
             $sql_rule{$1} = 1 while $text =~ /^\s*-?\s*id:\s*["']?([^\s"'#]+)/mg;
         }
     }
+    my $own_ignore = $engine eq 'opengrep' && ($version // '') =~ /\A([0-9]+)\./ && $1 >= 2;
     my $report = "$ctx->{raw}/rules.json";
     my $err = "$ctx->{raw}/rules.err";
     my $result = run_program(
         command => [
             $tool->{path}, 'scan', (map { ('--config', $_) } @configs), "--json-output=$report", '--disable-version-check',
             '--no-git-ignore', '--no-rewrite-rule-ids', ($engine eq 'opengrep' ? '--taint-intrafile' : '--metrics=off'),
+            # A nosemgrep comment does not hide a line, and opengrep reads
+            # its ignore file under a name no repository has. semgrep has
+            # no such option, nor has opengrep before 2.0, and they obey a
+            # .semgrepignore.
+            '--disable-nosem', ($own_ignore ? ('--semgrepignore-filename', $NO_IGNORE_FILE) : ()),
             '--timeout', '5', '--timeout-threshold', '3', '--max-target-bytes', '1000000', '--quiet',
             (map { "--exclude=$_" } @SKIPPED_DIRS, '*.min.js'), $ctx->{target},
         ],
@@ -1252,6 +1499,10 @@ sub run_code_rules {
     push @{ $ctx->{findings} }, @found;
     my $errors = ref $data->{errors} eq 'ARRAY' ? @{ $data->{errors} } : 0;
     push @notes, plural($errors, 'file') . ' it could not read fully' if $errors;
+    push @notes, grep { $_ ne '' }
+      add_suppression($ctx, $engine, 'nosemgrep comments', count_marks($ctx, qw(nosem nosemgrep noopengrep)), 0),
+      add_suppression($ctx, $engine, '.semgrepignore files', files_named($ctx, '.semgrepignore'), !$own_ignore);
+    push @notes, $build if $build ne '';
     add_tool($ctx, $engine, $version, 'ran', join('; ', @notes));
     return;
 }
@@ -1333,7 +1584,7 @@ sub trivy_tool {
         add_tool($ctx, $name, undef, 'missing', missing_note('trivy'));
         return;
     }
-    return ($tool, $version);
+    return ($tool, $version, build_note($ctx, 'trivy', $tool, $version));
 }
 
 # Pieces of text as sentences: each ends with one full stop.
@@ -1349,12 +1600,31 @@ sub sentences {
 
 sub trivy_skip_dirs { return map { ('--skip-dirs', "**/$_") } @SKIPPED_DIRS }
 
+# Trivy reads trivy.yaml and .trivyignore from the folder it runs in, which
+# is the repository: it is given an empty file from here for each instead.
+sub trivy_own_settings {
+    my ($ctx) = @_;
+    return ('--config', $ctx->{empty}, '--ignorefile', $ctx->{empty});
+}
+
+# The repository's own ways to hide a finding from Trivy. Its settings and
+# ignore files are not read; a trivy:ignore comment in an infrastructure
+# file is, since Trivy has no option to pass it by.
+sub trivy_suppressions {
+    my ($ctx) = @_;
+    my $name = 'trivy-config';
+    return grep { $_ ne '' }
+      add_suppression($ctx, 'trivy', 'Trivy settings and ignore files (trivy.yaml, .trivyignore)',
+        files_named($ctx, qw(trivy.yaml trivy.yml .trivyignore .trivyignore.yaml .trivyignore.yml)), 0),
+      add_suppression($ctx, $name, 'trivy:ignore comments', count_marks($ctx, qw(trivy:ignore tfsec:ignore)), 1);
+}
+
 # Trivy's checks of infrastructure files: Dockerfiles, Terraform,
 # Kubernetes, CloudFormation and Helm, from the checks built into Trivy,
 # kept off the network.
 sub run_trivy_config {
     my ($ctx) = @_;
-    my ($tool, $version) = trivy_tool($ctx, 'trivy-config',
+    my ($tool, $version, $build) = trivy_tool($ctx, 'trivy-config',
         $ctx->{mode} eq 'quick' ? 'full mode only: infrastructure files are checked in a full scan' : undef);
     return unless $tool;
     my $report = "$ctx->{raw}/trivy-config.json";
@@ -1362,7 +1632,7 @@ sub run_trivy_config {
     my $result = run_program(
         command => [
             $tool->{path}, 'config', '--skip-check-update', '--disable-telemetry', '--skip-version-check', '--cache-dir', "$ctx->{raw}/trivy-cache", '--format', 'json',
-            '--output', $report, '--quiet', '--exit-code', '0', trivy_skip_dirs(), $ctx->{target},
+            '--output', $report, '--quiet', '--exit-code', '0', trivy_own_settings($ctx), trivy_skip_dirs(), $ctx->{target},
         ],
         cwd => $ctx->{root}, env => tool_env($ctx, %NO_NETWORK), stderr => $err, timeout => scan_timeout(),
     );
@@ -1385,7 +1655,8 @@ sub run_trivy_config {
     my $left = keep_visible($ctx, \@found);
     push @{ $ctx->{findings} }, @found;
     add_tool($ctx, 'trivy-config', $version, 'ran',
-        join('; ', 'infrastructure files, offline', plural(scalar @found, 'finding'), $left ? "left out $left in files git ignores" : ()));
+        join('; ', 'infrastructure files, offline', plural(scalar @found, 'finding'), $left ? "left out $left in files git ignores" : (),
+            trivy_suppressions($ctx), $build ne '' ? $build : ()));
     return;
 }
 
@@ -1416,7 +1687,7 @@ sub trivy_config_finding {
 # it runs only in full mode, and a failure is reported, not fatal.
 sub run_trivy_vuln {
     my ($ctx) = @_;
-    my ($tool, $version) = trivy_tool($ctx, 'trivy-vuln',
+    my ($tool, $version, $build) = trivy_tool($ctx, 'trivy-vuln',
         $ctx->{mode} eq 'quick' ? 'full mode only: dependency vulnerabilities are checked in a full scan, which downloads Trivy\'s database' : undef);
     return unless $tool;
     my $cache = $ENV{FLASHTEAMS_TRIVY_CACHE};
@@ -1425,7 +1696,7 @@ sub run_trivy_vuln {
     my $result = run_program(
         command => [
             $tool->{path}, 'fs', '--scanners', 'vuln', '--disable-telemetry', '--skip-version-check', (defined $cache && $cache ne '' ? ('--cache-dir', $cache) : ()),
-            '--format', 'json', '--output', $report, '--quiet', '--exit-code', '0', trivy_skip_dirs(), $ctx->{target},
+            '--format', 'json', '--output', $report, '--quiet', '--exit-code', '0', trivy_own_settings($ctx), trivy_skip_dirs(), $ctx->{target},
         ],
         cwd => $ctx->{root}, env => tool_env($ctx), stderr => $err, timeout => scan_timeout(),
     );
@@ -1449,7 +1720,8 @@ sub run_trivy_vuln {
     my $left = keep_visible($ctx, \@found);
     push @{ $ctx->{findings} }, @found;
     add_tool($ctx, 'trivy-vuln', $version, 'ran',
-        join('; ', 'dependency vulnerabilities', plural(scalar @found, 'finding'), $left ? "left out $left in files git ignores" : ()));
+        join('; ', 'dependency vulnerabilities', plural(scalar @found, 'finding'), $left ? "left out $left in files git ignores" : (),
+            $build ne '' ? $build : ()));
     return;
 }
 
@@ -1559,6 +1831,19 @@ sub print_summary {
     for my $tool (@{ $ctx->{tools} }) {
         print "  $tool->{name}" . (defined $tool->{version} ? " $tool->{version}" : '') . ": $tool->{status}"
           . ($tool->{note} ne '' ? ". $tool->{note}" : '') . "\n";
+    }
+    if (my @unchecked = sort keys %{ $ctx->{unchecked} }) {
+        my @install = grep { $PINS{$_} } map { $_ eq 'semgrep' ? 'opengrep' : $_ } @unchecked;
+        print "Not checked builds: @unchecked. They ran, but were not checked against a pinned checksum; say so in the report.\n";
+        print qq{  The checked ones: perl "} . chars($SELF) . qq{" install @install\n} if @install;
+    }
+    if (@{ $ctx->{suppressions} }) {
+        print "The repository's own suppressions (say them in the report):\n";
+        for my $s (@{ $ctx->{suppressions} }) {
+            print "  $s->{tool}: $s->{what} ($s->{count}), "
+              . ($s->{obeyed} ? "OBEYED: the scanner cannot be told to skip them, so what they hide is not in the findings\n"
+                : "not obeyed: what they would hide is in the findings\n");
+        }
     }
     my $count = counts_of($findings);
     print 'Findings: ' . scalar(@$findings) . ' (' . join(', ', map { "$_ $count->{$_}" } @SEVERITIES) . ")\n";

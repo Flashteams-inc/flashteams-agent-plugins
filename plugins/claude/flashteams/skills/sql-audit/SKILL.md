@@ -61,9 +61,11 @@ Console's socket: run them outside the sandbox when Codex asks.
 
 3. **Offer to install what is missing, and wait for a yes.** Tell the
    person the choices `doctor` printed (`perl "HELPER" install <tool>...`,
-   which downloads the version FlashTeams uses and checks it against a
-   pinned checksum, or Homebrew on a Mac). Run only what they agree to. If
-   they say no, carry on: the scan records each missing scanner.
+   which downloads the pinned version and checks it against a pinned
+   checksum, or Homebrew on a Mac, which gives its own latest version and
+   no such check). Run only what they agree to. If they say no, carry on:
+   the scan records each missing scanner, and says which ones that ran
+   were not checked builds.
 
 4. **Get FlashTeams' rules.** `perl "HELPER" rules` asks FlashTeams for
    them (`get_scan_rules`, which only reads) and prints the rules folder

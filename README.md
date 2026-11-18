@@ -149,7 +149,7 @@ In Claude Code they are commands:
 
 | Command | What it does |
 | :- | :- |
-| `/flashteams:security-audit` | Scans for committed secrets and FlashTeams' security and hotspot code rules; in full mode also infrastructure files and dependency vulnerabilities. The agent judges each finding, dismisses false positives, and writes a report with a fix-first list. |
+| `/flashteams:security-audit` | Scans for committed secrets and FlashTeams' security and hotspot code rules; in full mode also secrets in the git history, infrastructure files and dependency vulnerabilities. The agent judges each finding, dismisses false positives, reads what no scanner covers (build pipelines, and in full mode who can reach what), and writes a report with a fix-first list. |
 | `/flashteams:sql-audit` | Runs FlashTeams' SQL rules (`.sql` files, and SQL and NoSQL injection in application code) and checks `.sql` files for secrets, then reviews what rules cannot judge: tables without row-level security, grants to everyone, `SECURITY DEFINER` functions without a fixed `search_path`, personal data stored as plain text, dynamic SQL in stored procedures, and database passwords. Ends with a remediation list ordered by risk. |
 | `/flashteams:architecture-review` | Runs no scanners. Uses the product's FlashTeams code map when there is one (`code_map`, `query_codebase`, `read_docs`), otherwise reads the repository, and writes a report a new engineer can follow: the main parts, how data flows, where the auth boundaries are, then the risks (cycles, modules everything leans on, dead code, coupling, hard-to-reverse choices, bottlenecks). |
 
@@ -171,15 +171,36 @@ perl flashteams-scan.pl payload --out <work folder> --kind ... --summary-file ..
 perl flashteams-scan.pl send --out <work folder> [--product-id <id>]   # record_code_scan, through the flashteams command
 ```
 
-- **The scanners** are gitleaks 8.30.1 (secrets), opengrep 1.30.0
+- **The scanners** are gitleaks 8.30.1 (secrets), opengrep 2.0.0
   (FlashTeams' code rules; semgrep runs them in its place when opengrep is
-  missing) and Trivy 0.74.0, the versions FlashTeams' own scanner uses.
+  missing) and Trivy 0.76.2. FlashTeams' own scanner pins its versions
+  separately, and the two should move together.
   The agent offers to install what is missing and waits for your yes.
   `install` downloads each from its GitHub release into
   `~/.flashteams/tools/bin` (or `FLASHTEAMS_TOOLS_DIR`) for macOS or Linux
-  on arm64 or x64, checks it against a pinned checksum, and changes nothing
-  else; on a Mac, `brew install gitleaks trivy` works too. On Windows,
-  `install` points to the release pages instead.
+  on arm64 or x64, checks it against a pinned checksum, notes the program
+  it installed, and changes nothing else. On Windows, `install` points to
+  the release pages instead.
+- **Checked builds.** A scanner is a checked build when it is the pinned
+  version, unchanged since `install` put it there. One from the PATH or
+  Homebrew (`brew install gitleaks trivy` works on a Mac), or of another
+  version, still runs, but `doctor`, the scan's summary and the record in
+  FlashTeams all say it was not checked, and `doctor` gives the command
+  that replaces it. After the pins move, run `install` again.
+- **The repository does not decide what is checked.** gitleaks runs with
+  its built-in rules by name, so a `.gitleaks.toml` in the repository is
+  not read; Trivy is given empty settings and ignore files in place of
+  `trivy.yaml` and `.trivyignore`; `gitleaks:allow` and `nosemgrep`
+  comments do not hide a line; and opengrep 2.0 or later reads no
+  `.semgrepignore`. Three things a scanner cannot be told to skip:
+  a `.gitleaksignore` at the top of the scanned folder, `trivy:ignore`
+  comments, and a `.semgrepignore` under semgrep or an older opengrep.
+  The helper counts every suppression it finds, says which were obeyed,
+  and the agent puts them in the report.
+- **The git history**, in full mode: gitleaks reads every commit git has
+  on this computer, with its built-in rules. A secret still on its line
+  in the files is listed once, there; one that is not is listed as a
+  secret in the history, with its commit and date and no code.
 - **FlashTeams' rules** come from the `get_scan_rules` tool, which gives a
   link that works once, within two minutes, and says nothing about who
   asked. The helper checks the download against

@@ -14,6 +14,11 @@
 #     titles, CWE), files git ignores left out, the SQL audit's filters,
 #     a missing scanner, semgrep in place of opengrep, no rules, and
 #     fingerprints that stay put when lines move but differ for repeats;
+#   - that the repository cannot silence the scan: no scanner reads its
+#     settings from it, its ignore files and comments are passed by where
+#     a scanner can be told so, and every one is counted, with the ones
+#     obeyed said; the git history in full mode; and which scanners are
+#     the checked builds install left;
 #   - show: the code around a finding, with a secret as [hidden];
 #   - payload: the exact fields, git's facts (no user name or password in
 #     the remote, dirty, detached, no commits), the notes, the cap of 500,
@@ -111,6 +116,7 @@ my %FAKE = (
 #!/bin/sh
 if [ "$1" = version ]; then echo 8.30.1; exit 0; fi
 printf 'gitleaks %s\n' "$*" >> "$FAKE_LOG"
+sub=$1
 out= config=
 while [ $# -gt 0 ]; do
   case $1 in
@@ -119,11 +125,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-if [ -n "$config" ]; then cp "$FAKE_FIXTURES/gitleaks-flashteams.json" "$out"; else cp "$FAKE_FIXTURES/gitleaks-default.json" "$out"; fi
+case $sub:$config in
+  git:*) cp "$FAKE_FIXTURES/gitleaks-history.json" "$out" ;;
+  *:*/flashteams.toml) cp "$FAKE_FIXTURES/gitleaks-flashteams.json" "$out" ;;
+  *) cp "$FAKE_FIXTURES/gitleaks-default.json" "$out" ;;
+esac
 EOF
     opengrep => <<'EOF',
 #!/bin/sh
-if [ "$1" = --version ]; then echo 1.30.0; exit 0; fi
+if [ "$1" = --version ]; then echo "${FAKE_OPENGREP_VERSION:-2.0.0}"; exit 0; fi
 printf 'opengrep %s\n' "$*" >> "$FAKE_LOG"
 out=
 for arg in "$@"; do case $arg in --json-output=*) out=${arg#--json-output=} ;; esac; done
@@ -135,7 +145,7 @@ echo "a code line the text output would print: CODE-ON-STDOUT"
 EOF
     trivy => <<'EOF',
 #!/bin/sh
-if [ "$1" = --version ]; then printf 'Version: 0.74.0\nVulnerability DB:\n'; exit 0; fi
+if [ "$1" = --version ]; then printf 'Version: 0.76.2\nVulnerability DB:\n'; exit 0; fi
 printf 'trivy %s proxy=%s\n' "$*" "${HTTPS_PROXY:-}" >> "$FAKE_LOG"
 sub=$1
 out=
@@ -165,7 +175,7 @@ printf 'not the program you asked for' > "$out"
 EOF
     brew => "#!/bin/sh\nexit 0\n",
 );
-$FAKE{semgrep} = $FAKE{opengrep} =~ s/echo 1\.30\.0/echo 1.99.0/r =~ s/opengrep %s/semgrep %s/r;
+$FAKE{semgrep} = $FAKE{opengrep} =~ s/echo "\$\{FAKE_OPENGREP_VERSION:-2\.0\.0\}"/echo 1.99.0/r =~ s/opengrep %s/semgrep %s/r;
 
 # Folders of stand-ins, each with the scanners named.
 sub fakes {
@@ -262,6 +272,7 @@ sub write_fixtures {
         $secret_finding->(rule => 'aws-access-token', line => 1, column => 11, secret => $SECRET, file => '.env'),
         $secret_finding->(rule => 'generic-api-key', line => 2, column => 40, secret => $SECRET2, file => 'db/seed.sql'),
     ]);
+    write_json("$FIXTURES/gitleaks-history.json", []) unless -e "$FIXTURES/gitleaks-history.json";
     write_json("$FIXTURES/gitleaks-flashteams.json", [
         $secret_finding->(rule => 'flashteams-named-secret-without-operator', line => 2, column => 11, secret => $SECRET2,
             file => 'notes.txt', description => "A long random value written after a secret's name, with only spaces between them."),
@@ -287,7 +298,7 @@ sub write_fixtures {
         message => 'This SQL statement is built by concatenating values and then run.', severity => 'WARNING',
         metadata => { category => 'hotspot', impact => 'medium', cwe => ['CWE-89: SQL Injection'] });
     write_json("$FIXTURES/opengrep-security.json", {
-        version => '1.30.0', errors => [ { message => 'one file did not parse' } ], paths => { scanned => [] },
+        version => '2.0.0', errors => [ { message => 'one file did not parse' } ], paths => { scanned => [] },
         results => [
             $sql_injection,
             $concat, $concat,
@@ -464,8 +475,11 @@ sub check_shape {
     my $some = fakes('some', qw(gitleaks trivy brew));
     my $r = helper(cwd => $REPO, fakes => $some, args => ['doctor'], env => { FLASHTEAMS_SCAN_PLATFORM => 'darwin-arm64' });
     is($r->{status}, 0, 'doctor exits 0');
-    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(PATH: \Q$some\E\/gitleaks\)$/m, 'doctor finds gitleaks on the PATH, with its version');
-    like($r->{stdout}, qr/^  trivy     0\.74\.0 +ready/m, "doctor reads Trivy's version");
+    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(PATH: \Q$some\E\/gitleaks, not checked\)$/m,
+        'doctor finds gitleaks on the PATH, with its version, and says it is not a checked build');
+    like($r->{stdout}, qr/^Not checked against a pinned checksum: gitleaks trivy\. A scan runs with them and says so\.$/m, 'and lists the unchecked scanners');
+    like($r->{stdout}, qr/^To replace them with the checked versions: perl "\Q$HELPER\E" install gitleaks trivy$/m, 'with the command that replaces them');
+    like($r->{stdout}, qr/^  trivy     0\.76\.2 +ready/m, "doctor reads Trivy's version");
     like($r->{stdout}, qr/^  opengrep  missing$/m, 'doctor says opengrep is missing');
     like($r->{stdout}, qr/^  git       \S+ +ready/m, 'doctor checks git');
     like($r->{stdout}, qr/^  opengrep: perl "\Q$HELPER\E" install opengrep$/m, 'doctor gives the exact install command');
@@ -477,7 +491,8 @@ sub check_shape {
     like($r->{stdout}, qr/^  gitleaks: perl "\Q$HELPER\E" install gitleaks   or   brew install gitleaks$/m,
         'on a Mac with Homebrew, both ways to install gitleaks');
     like($r->{stdout}, qr/^All at once: perl "\Q$HELPER\E" install gitleaks opengrep trivy$/m, 'and all at once');
-    like($r->{stdout}, qr/^With Homebrew: brew install gitleaks trivy$/m, 'and with Homebrew');
+    like($r->{stdout}, qr/^With Homebrew \(its own latest version, not checked against a pin\): brew install gitleaks trivy$/m,
+        'and with Homebrew, which is not a checked build');
     $r = helper(cwd => $REPO, fakes => $none, args => ['doctor'], env => { FLASHTEAMS_SCAN_PLATFORM => 'linux-x64' });
     unlike($r->{stdout}, qr/brew/, 'no Homebrew on Linux');
 
@@ -487,6 +502,7 @@ sub check_shape {
     is_deeply($report->{missing}, [qw(gitleaks opengrep trivy)], 'doctor --json lists the missing scanners');
     is($report->{install_all}, qq{perl "$HELPER" install gitleaks opengrep trivy}, 'doctor --json gives the install command');
     is($report->{platform}, 'linux-x64', 'doctor --json names the platform');
+    is_deeply($report->{unchecked}, [], 'and no unchecked scanner when none is here');
 
     # The tools folder comes before the PATH.
     my $folder = "$TMP/tools-folder";
@@ -494,7 +510,20 @@ sub check_shape {
     my $old = fakes('old', 'gitleaks');
     write_file("$old/gitleaks", "#!/bin/sh\necho 8.0.0\n", 0755);
     $r = helper(cwd => $REPO, fakes => $old, args => ['doctor'], env => { FLASHTEAMS_TOOLS_DIR => $folder });
-    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(tools folder\)$/m, 'the tools folder comes before the PATH');
+    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(tools folder, not checked\)$/m,
+        'the tools folder comes before the PATH, and a program install did not put there is not checked');
+    # What install leaves: the version and the checksum of the program.
+    write_json("$folder/.flashteams-installed.json", { gitleaks => { version => '8.30.1', sha256 => sha256_hex($FAKE{gitleaks}) } });
+    $r = helper(cwd => $REPO, fakes => $old, args => ['doctor'], env => { FLASHTEAMS_TOOLS_DIR => $folder });
+    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(tools folder, checked\)$/m, 'the program install checked and noted is the checked build');
+    unlike($r->{stdout}, qr/Not checked against/, 'and nothing is listed as unchecked');
+    write_file("$folder/gitleaks", $FAKE{gitleaks} . "# changed\n", 0755);
+    $r = helper(cwd => $REPO, fakes => $old, args => ['doctor'], env => { FLASHTEAMS_TOOLS_DIR => $folder });
+    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(tools folder, not checked\)$/m, 'a program changed since install is not');
+    write_file("$folder/gitleaks", $FAKE{gitleaks}, 0755);
+    write_json("$folder/.flashteams-installed.json", { gitleaks => { version => '8.29.0', sha256 => sha256_hex($FAKE{gitleaks}) } });
+    $r = helper(cwd => $REPO, fakes => $old, args => ['doctor'], env => { FLASHTEAMS_TOOLS_DIR => $folder });
+    like($r->{stdout}, qr/^  gitleaks  8\.30\.1 +ready \(tools folder, not checked\)$/m, 'nor one installed for another pin');
 
     my $semgrep = fakes('semgrep-only', qw(gitleaks semgrep trivy));
     $r = helper(cwd => $REPO, fakes => $semgrep, args => ['doctor']);
@@ -525,7 +554,7 @@ sub check_shape {
     $r = helper(cwd => $REPO, fakes => $curl, args => [ 'install', 'trivy' ],
         env => { FLASHTEAMS_TOOLS_DIR => $tools, FLASHTEAMS_SCAN_PLATFORM => 'windows-x64' });
     is($r->{status}, 1, 'install does not work on Windows');
-    like($r->{stdout}, qr{trivy 0\.74\.0: https://github\.com/aquasecurity/trivy/releases/tag/v0\.74\.0}, 'it points to the release page');
+    like($r->{stdout}, qr{trivy 0\.76\.2: https://github\.com/aquasecurity/trivy/releases/tag/v0\.76\.2}, 'it points to the release page');
     is($r->{log}, '', 'and downloads nothing');
 
     $r = helper(cwd => $REPO, fakes => $curl, args => [ 'install', 'nmap' ]);
@@ -542,8 +571,8 @@ sub check_shape {
         }
     }
     like($source, qr/version => '8\.30\.1'/, 'gitleaks 8.30.1');
-    like($source, qr/version => '1\.30\.0'/, 'opengrep 1.30.0');
-    like($source, qr/version => '0\.74\.0'/, 'trivy 0.74.0');
+    like($source, qr/version => '2\.0\.0'/, 'opengrep 2.0.0');
+    like($source, qr/version => '0\.76\.2'/, 'trivy 0.76.2');
 }
 
 # ---------------------------------------------------------------------------
@@ -571,7 +600,7 @@ my %BUNDLE_FILES = (
 sub bundle {
     my (%opt) = @_;
     my $bytes = $JSON->encode({ format => $opt{format} // 1, version => $opt{version} // 'abc123def456',
-        tools => { gitleaks => '8.30.1', opengrep => '1.30.0', trivy => '0.74.0' }, files => $opt{files} // \%BUNDLE_FILES });
+        tools => { gitleaks => '8.30.1', opengrep => '2.0.0', trivy => '0.76.2' }, files => $opt{files} // \%BUNDLE_FILES });
     my $file = "$TMP/bundles/" . ($opt{name} // 'bundle') . '.json';
     write_file($file, $bytes);
     return ("file://$file", sha256_hex($bytes), $file);
@@ -687,13 +716,21 @@ my %QUICK;
     is(scalar(grep { $_->{category} =~ /\A(?:iac|dependency)\z/ } @$findings), 0, 'quick mode checks no infrastructure or dependencies');
 
     my $tools = json_file("$out/tools.json");
-    is_deeply([ map { "$_->{name} $_->{status}" } @$tools ], [ 'gitleaks ran', 'opengrep ran', 'trivy-config skipped', 'trivy-vuln skipped' ],
+    is_deeply([ map { "$_->{name} $_->{status}" } @$tools ], [ 'gitleaks ran', 'gitleaks-history skipped', 'opengrep ran', 'trivy-config skipped', 'trivy-vuln skipped' ],
         'each tool and what it did');
     like($tools->[0]{note}, qr/FlashTeams' secret rules/, "gitleaks ran FlashTeams' rules too");
     like($tools->[0]{note}, qr/left out 1 in files git ignores/, 'and says what it left out');
-    like($tools->[1]{note}, qr/1 file it could not read fully/, "opengrep's errors are counted");
-    like($tools->[2]{note}, qr/full mode only/, 'Trivy runs only in full mode');
-    is_deeply([ map { $_->{version} } @$tools ], [qw(8.30.1 1.30.0 0.74.0 0.74.0)], 'each tool has its version');
+    like($tools->[0]{note}, qr/; not the checked build: from the PATH\z/, 'and that it is not the build install checks');
+    like($tools->[1]{note}, qr/full mode only/, 'the git history is searched only in full mode');
+    like($tools->[2]{note}, qr/1 file it could not read fully/, "opengrep's errors are counted");
+    like($tools->[3]{note}, qr/full mode only/, 'Trivy runs only in full mode');
+    is_deeply([ map { $_->{version} } @$tools ], [qw(8.30.1 8.30.1 2.0.0 0.76.2 0.76.2)], 'each tool has its version');
+    like($r->{stdout}, qr/^Not checked builds: gitleaks opengrep\. They ran, but were not checked against a pinned checksum; say so in the report\.$/m,
+        'the summary names the scanners that are not checked builds');
+    like($r->{stdout}, qr/^  The checked ones: perl "\Q$HELPER\E" install gitleaks opengrep$/m, 'and how to get the checked ones');
+    is_deeply(json_file("$out/scan.json")->{unchecked}, [qw(gitleaks opengrep)], 'scan.json lists them');
+    is_deeply(json_file("$out/scan.json")->{suppressions}, [], 'a repository with no suppressions has none listed');
+    unlike($r->{stdout}, qr/own suppressions/, 'and the summary does not mention any');
 
     my $scan = json_file("$out/scan.json");
     is_deeply([ @$scan{qw(kind mode path rules_version root)} ], [ 'security', 'quick', '', 'abc123def456', $REPO ],
@@ -701,12 +738,13 @@ my %QUICK;
 
     my @gitleaks = $r->{log} =~ /^gitleaks (.*)$/mg;
     is(scalar(@gitleaks), 2, 'gitleaks runs twice');
-    like($gitleaks[0], qr/\Adir \. --report-format json --report-path \S+ --no-banner --exit-code 0 --max-target-megabytes 5 --log-level error --redact\z/,
-        'first with its own rules, redacting secrets');
-    like($gitleaks[1], qr/--redact --config \Q$RULES\E\/gitleaks\/flashteams\.toml\z/, "then with FlashTeams' rules");
+    like($gitleaks[0], qr/\Adir \. --report-format json --report-path \S+ --no-banner --exit-code 0 --max-target-megabytes 5 --log-level error --redact --config \S+\/gitleaks-default\.toml --ignore-gitleaks-allow --gitleaks-ignore-path \S+\/empty\z/,
+        "first with its own rules by name, so the repository's .gitleaks.toml is not read, redacting secrets, and passing gitleaks:allow comments by");
+    like($gitleaks[1], qr/--redact --config \Q$RULES\E\/gitleaks\/flashteams\.toml --ignore-gitleaks-allow --gitleaks-ignore-path \S+\/empty\z/, "then with FlashTeams' rules");
+    unlike($r->{log}, qr/^gitleaks git /m, 'the git history is not searched in quick mode');
     my ($opengrep) = $r->{log} =~ /^opengrep (.*)$/m;
-    like($opengrep, qr/\Ascan --config \Q$RULES\E\/opengrep\/security --config \Q$RULES\E\/opengrep\/hotspot --json-output=\S+ --disable-version-check --no-git-ignore --no-rewrite-rule-ids --taint-intrafile --timeout 5 --timeout-threshold 3 --max-target-bytes 1000000 --quiet /,
-        "opengrep runs FlashTeams' security and hotspot rules as the cloud scanner does");
+    like($opengrep, qr/\Ascan --config \Q$RULES\E\/opengrep\/security --config \Q$RULES\E\/opengrep\/hotspot --json-output=\S+ --disable-version-check --no-git-ignore --no-rewrite-rule-ids --taint-intrafile --disable-nosem --semgrepignore-filename \.flashteams-scan-reads-no-ignore-file --timeout 5 --timeout-threshold 3 --max-target-bytes 1000000 --quiet /,
+        "opengrep runs FlashTeams' security and hotspot rules, obeying no nosemgrep comment and no .semgrepignore");
     like($opengrep, qr/--exclude=node_modules .*--exclude=vendor .*--exclude=dist .*--exclude=build .*--exclude=\.venv .*--exclude=\*\.min\.js \.\z/,
         'leaving out dependencies and built output');
     unlike($r->{log}, qr/^trivy/m, 'Trivy does not run in quick mode');
@@ -793,15 +831,18 @@ my %QUICK;
     my ($nofix) = find_rule($findings, 'trivy:GHSA-aaaa-bbbb-cccc');
     is_deeply([ @$nofix{qw(severity recommendation)} ], [ 'low', '' ], 'with no fixed version, no recommendation');
     my $tools = json_file("$out/tools.json");
-    is_deeply([ map { "$_->{name} $_->{status}" } @$tools ], [ 'gitleaks ran', 'opengrep ran', 'trivy-config ran', 'trivy-vuln ran' ],
+    is_deeply([ map { "$_->{name} $_->{status}" } @$tools ], [ 'gitleaks ran', 'gitleaks-history ran', 'opengrep ran', 'trivy-config ran', 'trivy-vuln ran' ],
         'in full mode every tool runs');
+    like($r->{log}, qr/^gitleaks git \. --report-format json --report-path \S+ --no-banner --exit-code 0 --max-target-megabytes 5 --log-level error --redact --config \S+\/gitleaks-default\.toml --ignore-gitleaks-allow --gitleaks-ignore-path \S+\/empty$/m,
+        "the git history is searched with gitleaks' own rules, redacting secrets");
     my ($config) = $r->{log} =~ /^trivy (config .*)$/m;
-    like($config, qr/\Aconfig --skip-check-update --disable-telemetry --skip-version-check --cache-dir \S+ --format json --output \S+ --quiet --exit-code 0 --skip-dirs \*\*\/node_modules /,
-        "Trivy's infrastructure check runs with its own checks, its usage data off");
+    like($config, qr/\Aconfig --skip-check-update --disable-telemetry --skip-version-check --cache-dir \S+ --format json --output \S+ --quiet --exit-code 0 --config \S+\/empty --ignorefile \S+\/empty --skip-dirs \*\*\/node_modules /,
+        "Trivy's infrastructure check runs with its own checks, its usage data off, and no settings or ignore file of the repository's");
     like($config, qr/ proxy=http:\/\/127\.0\.0\.1:9\z/, 'and kept off the network');
     my ($vuln) = $r->{log} =~ /^trivy (fs .*)$/m;
     like($vuln, qr/\Afs --scanners vuln --disable-telemetry --skip-version-check --cache-dir \Q$cache\E --format json /,
         "the dependency check runs only Trivy's vulnerability scanner, with FLASHTEAMS_TRIVY_CACHE as its cache");
+    like($vuln, qr/ --config \S+\/empty --ignorefile \S+\/empty /, "and no settings or ignore file of the repository's either");
     like($vuln, qr/ proxy=\z/, 'and may use the network for its database');
     unlike(slurp("$out/findings.json"), qr/THE-FLAGGED-CODE/, "the code the scanners quote is not kept");
 
@@ -814,6 +855,120 @@ my %QUICK;
     is($failed->{status}, 'failed', 'it is recorded as failed');
     like($failed->{note}, qr/database could not be downloaded: FATAL failed to download vulnerability DB/, "with Trivy's reason");
     ok(scalar(find_rule(json_file("$out/findings.json"), 'trivy:DS-0002')), 'and the other checks still count');
+}
+
+# ---------------------------------------------------------------------------
+# run: a repository that tries to hide findings, and the git history
+
+{
+    my $repo = "$TMP/guarded";
+    my %files = (
+        'keys.py'          => qq{token = "$SECRET"  # gitleaks:allow\n},
+        'src/app.js'       => "run(input); // nosemgrep\nrun(other);\n",
+        'infra/Dockerfile' => "FROM node:20\n#trivy:ignore:DS-0002\nUSER root\n",
+        '.gitleaks.toml'   => qq{[[allowlists]]\npaths = [".*"]\n},
+        '.gitleaksignore'  => "# known\nkeys.py:generic-api-key:4\n\nold.py:aws-access-token:2\n",
+        '.semgrepignore'   => "src/\n",
+        'trivy.yaml'       => "severity:\n  - CRITICAL\n",
+        '.trivyignore'     => "DS-0002\n",
+    );
+    write_file("$repo/$_", $files{$_}) for keys %files;
+    git($repo, 'init', '-q');
+    git($repo, 'add', '-A');
+    git($repo, 'commit', '-q', '-m', 'first');
+    chomp(my $commit = git($repo, 'rev-parse', 'HEAD'));
+
+    my $fixtures = "$TMP/fixtures-guarded";
+    my $leak = sub {
+        my (%f) = @_;
+        return { RuleID => $f{rule}, Description => 'A key.', File => $f{file}, StartLine => $f{line}, EndLine => $f{line}, StartColumn => 10, EndColumn => 30,
+            Commit => $f{commit} // '', Date => '2026-03-04T05:06:07Z', Author => 'Someone Named', Email => 'someone@example.com',
+            Message => 'add the key', Secret => $f{secret} // $SECRET, Match => "token = \"$SECRET\"", Line => "token = \"$SECRET\"", Tags => [] };
+    };
+    write_json("$fixtures/gitleaks-default.json", [ $leak->(rule => 'aws-access-token', file => 'keys.py', line => 1) ]);
+    write_json("$fixtures/gitleaks-flashteams.json", []);
+    write_json("$fixtures/gitleaks-history.json", [
+        $leak->(rule => 'aws-access-token', file => 'keys.py', line => 1, commit => $commit),                     # still on its line
+        $leak->(rule => 'aws-access-token', file => 'keys.py', line => 9, commit => $commit),                     # a line since removed
+        $leak->(rule => 'github-pat', file => 'keys.py', line => 1, commit => $commit),                           # not found in the files
+        $leak->(rule => 'generic-api-key', file => 'old/creds.txt', line => 7, commit => 'a' x 40, secret => $SECRET2),    # a file since deleted
+        $leak->(rule => 'generic-api-key', file => 'infra/old.env', line => 2, commit => 'b' x 40, secret => $SECRET2),
+        { RuleID => 'no-commit', File => 'x', StartLine => 1, Secret => $SECRET },
+    ]);
+    write_json("$fixtures/opengrep-security.json", { errors => [], results => [] });
+    write_json("$fixtures/$_.json", { Results => [] }) for qw(trivy-config trivy-vuln);
+
+    my $out = work('guarded');
+    my $r = helper(cwd => $repo, args => [ 'run', '--kind', 'security', '--mode', 'full', '--rules', $RULES, '--out', $out ],
+        env => { FAKE_FIXTURES => $fixtures });
+    is($r->{status}, 0, 'a full scan of a repository with its own suppressions runs') or diag($r->{stderr});
+    my $scan = json_file("$out/scan.json");
+    is_deeply([ map { join(' | ', $_->{tool}, $_->{what}, $_->{count}, $_->{obeyed} ? 'obeyed' : 'not obeyed') } @{ $scan->{suppressions} } ], [
+        'gitleaks | gitleaks settings file (.gitleaks.toml) | 1 | not obeyed',
+        'gitleaks | gitleaks:allow comments | 1 | not obeyed',
+        'gitleaks | .gitleaksignore entries | 2 | obeyed',
+        'opengrep | nosemgrep comments | 1 | not obeyed',
+        'opengrep | .semgrepignore files | 1 | not obeyed',
+        'trivy | Trivy settings and ignore files (trivy.yaml, .trivyignore) | 2 | not obeyed',
+        'trivy-config | trivy:ignore comments | 1 | obeyed',
+    ], "scan.json lists the repository's own suppressions, and which a scanner obeyed");
+    like($r->{stdout}, qr/^The repository's own suppressions \(say them in the report\):$/m, 'the summary lists them');
+    like($r->{stdout}, qr/^  gitleaks: gitleaks:allow comments \(1\), not obeyed: what they would hide is in the findings$/m, 'one passed by');
+    like($r->{stdout}, qr/^  gitleaks: \.gitleaksignore entries \(2\), OBEYED: the scanner cannot be told to skip them, so what they hide is not in the findings$/m,
+        'and one obeyed');
+    my %tool = map { $_->{name} => $_ } @{ json_file("$out/tools.json") };
+    like($tool{gitleaks}{note}, qr/obeyed the repository's \.gitleaksignore entries \(2\), which it cannot be told to skip/, "gitleaks' note says what it obeyed");
+    unlike($tool{gitleaks}{note}, qr/gitleaks:allow/, 'and not what it passed by');
+    like($tool{'trivy-config'}{note}, qr/obeyed the repository's trivy:ignore comments \(1\)/, "so does Trivy's");
+    unlike($tool{opengrep}{note}, qr/obeyed/, 'opengrep obeyed nothing');
+
+    my $findings = json_file("$out/findings.json");
+    check_shape($findings, 'guarded');
+    my @history = grep { $_->{title} =~ /\ASecret in the git history/ } @$findings;
+    is_deeply([ sort map { "$_->{rule} $_->{path}" } @history ],
+        [ 'gitleaks:aws-access-token keys.py', 'gitleaks:generic-api-key infra/old.env', 'gitleaks:generic-api-key old/creds.txt', 'gitleaks:github-pat keys.py' ],
+        'the history gives the secrets that are not on their line in the files now; one without a commit is left out');
+    is(scalar(grep { $_->{rule} eq 'gitleaks:aws-access-token' && $_->{title} =~ /\ASecret written in the code/ } @$findings), 1,
+        'the key still in the files is listed once, by the scan of the files');
+    my ($old) = grep { ($_->{path} // '') eq 'old/creds.txt' } @history;
+    is_deeply([ @$old{qw(category severity line tool cwe)} ], [ 'secret', 'high', undef, 'gitleaks', 'CWE-798' ], 'a secret in the history: high, with no line in the files');
+    like($old->{detail}, qr/\AAdded in commit aaaaaaaaaaaa on 2026-03-04, at line 7 of the file as it was then\./, 'its detail names the commit, the date and the line then');
+    like($old->{recommendation}, qr/\ARevoke it/, 'and the fix is to revoke it');
+    unlike($JSON->encode($findings), qr/Someone Named|someone\@example\.com|add the key/, "a commit's author and message are not kept");
+    like($tool{'gitleaks-history'}{note}, qr/4 findings not in the files now; 1 more still in the files, listed there/, "the history's note counts both");
+    my $hidden = json_file("$out/hidden.json");
+    is(scalar(keys %$hidden), 1, 'only the secret in the files has a line to hide');
+    my ($n) = grep { $findings->[$_] == $old } 0 .. $#$findings;
+    $r = helper(cwd => $repo, args => [ 'show', '--out', $out, '--ids', $n + 1 ]);
+    like($r->{stdout}, qr/This finding is about the whole file, not one line/, 'show prints no code for a secret in the history');
+
+    # Before 2.0 opengrep cannot be given another ignore file, so it obeys the repository's.
+    $out = work('guarded-old-opengrep');
+    $r = helper(cwd => $repo, args => [ 'run', '--kind', 'security', '--rules', $RULES, '--out', $out ],
+        env => { FAKE_FIXTURES => $fixtures, FAKE_OPENGREP_VERSION => '1.30.0' });
+    unlike($r->{log}, qr/--semgrepignore-filename/, 'opengrep 1.30.0 is not given the option it does not take');
+    like($r->{log}, qr/^opengrep .* --disable-nosem /m, 'but still passes nosemgrep comments by');
+    like($r->{stdout}, qr/^  opengrep: \.semgrepignore files \(1\), OBEYED/m, 'and its .semgrepignore is said to be obeyed');
+    like($r->{stdout}, qr/not the checked build: from the PATH, and the checked version is 2\.0\.0/, 'with the version install would give');
+    unlike($r->{stdout}, qr/trivy:ignore|Trivy settings/, "a quick scan lists no Trivy suppressions, as Trivy does not run");
+
+    # One folder: its history only, and the ignore file gitleaks reads for the history is the root's.
+    $out = work('guarded-folder');
+    $r = helper(cwd => $repo, args => [ 'run', '--kind', 'security', '--mode', 'full', '--path', 'infra', '--rules', $RULES, '--out', $out ],
+        env => { FAKE_FIXTURES => $fixtures });
+    is_deeply([ map { $_->{path} } grep { $_->{title} =~ /git history/ } @{ json_file("$out/findings.json") } ], ['infra/old.env'],
+        "a scan of one folder keeps the history's secrets in that folder");
+    like($r->{stdout}, qr/^  gitleaks-history: \.gitleaksignore entries \(2\), OBEYED/m, "and says the root's .gitleaksignore was obeyed for the history");
+    unlike($r->{stdout}, qr/^  gitleaks: \.gitleaksignore/m, 'the folder itself has none');
+
+    # No commits yet: nothing to search.
+    my $empty = "$TMP/no-commits";
+    write_file("$empty/a.txt", "hello\n");
+    git($empty, 'init', '-q');
+    $out = work('no-commits');
+    $r = helper(cwd => $empty, args => [ 'run', '--kind', 'security', '--mode', 'full', '--out', $out ], env => { FAKE_FIXTURES => $fixtures });
+    my ($skipped) = grep { $_->{name} eq 'gitleaks-history' } @{ json_file("$out/tools.json") };
+    is_deeply([ @$skipped{qw(status note)} ], [ 'skipped', 'this repository has no commits yet' ], 'a repository with no commits has no history to search');
 }
 
 # ---------------------------------------------------------------------------
@@ -848,8 +1003,8 @@ my %QUICK;
     my $r = helper(cwd => $REPO, args => [ 'run', '--kind', 'security', '--out', $out ]);
     is($r->{status}, 0, 'a scan without rules runs');
     my $tools = json_file("$out/tools.json");
-    is_deeply([ (map { "$_->{name} $_->{status}" } @$tools)[ 0, 1 ] ], [ 'gitleaks ran', 'opengrep skipped' ], 'opengrep is skipped');
-    is($tools->[1]{note}, 'FlashTeams rules not downloaded', 'because the rules were not downloaded');
+    is_deeply([ (map { "$_->{name} $_->{status}" } @$tools)[ 0, 2 ] ], [ 'gitleaks ran', 'opengrep skipped' ], 'opengrep is skipped');
+    is($tools->[2]{note}, 'FlashTeams rules not downloaded', 'because the rules were not downloaded');
     like($tools->[0]{note}, qr/its own rules only/, "gitleaks runs its own rules only");
     is(scalar(() = $r->{log} =~ /^gitleaks /mg), 1, 'once');
     is(json_file("$out/scan.json")->{rules_version}, undef, 'and no rules version is recorded');
@@ -870,7 +1025,10 @@ my %QUICK;
     ok(scalar(grep { $_->{tool} eq 'semgrep' } @{ json_file("$out/findings.json") }), 'its findings are its own');
     my ($line) = $r->{log} =~ /^semgrep (.*)$/m;
     like($line, qr/ --metrics=off /, 'semgrep runs with its metrics off');
-    unlike($line, qr/--taint-intrafile/, 'and without the opengrep-only option');
+    unlike($line, qr/--taint-intrafile|--semgrepignore-filename/, 'and without the opengrep-only options');
+    like($line, qr/ --disable-nosem /, 'but still passing nosemgrep comments by');
+    like($semgrep->{note}, qr/semgrep from the PATH in place of opengrep, not a checked build/, 'and the note says semgrep is not a checked build');
+    like($r->{stdout}, qr/^  The checked ones: perl "\Q$HELPER\E" install gitleaks opengrep$/m, 'with opengrep as the one to install');
 
     my $plain = "$TMP/not-a-repo";
     make_path($plain);
@@ -929,7 +1087,7 @@ sub payload {
     is_deeply($payload->{repository}, { remote_url => 'https://example.com/org/shop.git', branch => 'main', commit => $commit, dirty => JSON::PP::false },
         "git's facts, with the user name and password taken out of the remote address");
     is_deeply($payload->{findings}, $findings, 'the findings as the scan found them');
-    is_deeply([ map { $_->{name} } @{ $payload->{tools} } ], [qw(gitleaks opengrep trivy-config trivy-vuln)], 'and the tools');
+    is_deeply([ map { $_->{name} } @{ $payload->{tools} } ], [qw(gitleaks gitleaks-history opengrep trivy-config trivy-vuln)], 'and the tools');
     is($payload->{summary}, 'Two problems to fix first.', 'the summary');
     is($payload->{report_markdown}, "# Security audit of shop\n\nThe key in src/config.js and in ~/x.", 'the report, with no folder of this computer in it');
     my $text = slurp("$out/payload.json");
