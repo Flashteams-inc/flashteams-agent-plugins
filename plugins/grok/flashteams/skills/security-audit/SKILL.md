@@ -128,6 +128,15 @@ Flash Console's socket: run them outside the sandbox when Codex asks.
    when semgrep or an older opengrep runs): what they hide is not in the
    findings, and the report must say so.
 
+   "Dependencies NOT checked" lists the dependency lists (such as a
+   `package.json`, a `.csproj` or a `build.gradle`) that have no lock
+   file. The scanner looks up exact versions, and without a lock file it
+   has none, so "0 findings" there does not mean the dependencies are
+   safe. Say in the report which lists were not checked, and that
+   committing a lock file is what lets them be. If the dependency check
+   says it ran on a second try, a Maven project's indirect dependencies
+   may be missing: say that too.
+
    In full mode, a "Secret in the git history" finding is a key that was
    committed once and is not on that line in the files now. It is still in
    every copy of the repository, and still works unless it was revoked.
@@ -223,7 +232,8 @@ Flash Console's socket: run them outside the sandbox when Codex asks.
       which entry points, and which you did not get to;
     - what this scan cannot see: how the code runs; flaws in logic that
       no rule knows and you did not read; anything outside the folder;
-      dependencies of a project with no lock file; whether a leaked key
+      dependencies of a project with no lock file, each one named as
+      the summary listed it; whether a leaked key
       was revoked; in quick mode, the git history, infrastructure files,
       dependencies and who can reach what; in full mode, commits a
       shallow clone does not hold.

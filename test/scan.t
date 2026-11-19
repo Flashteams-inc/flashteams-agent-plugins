@@ -148,12 +148,14 @@ EOF
 if [ "$1" = --version ]; then printf 'Version: 0.76.2\nVulnerability DB:\n'; exit 0; fi
 printf 'trivy %s proxy=%s\n' "$*" "${HTTPS_PROXY:-}" >> "$FAKE_LOG"
 sub=$1
+all=$*
 out=
 while [ $# -gt 0 ]; do case $1 in --output) out=$2; shift ;; esac; shift; done
 case $sub in
   config) cp "${FAKE_TRIVY_CONFIG:-$FAKE_FIXTURES/trivy-config.json}" "$out" ;;
   fs)
     if [ -n "${FAKE_TRIVY_FS_FAIL:-}" ]; then echo "FATAL failed to download vulnerability DB" >&2; exit 1; fi
+    case " $all " in *" --offline-scan "*) ;; *) if [ -n "${FAKE_TRIVY_FS_FAIL_ONLINE:-}" ]; then echo "FATAL remote Maven repository returned 429 Too Many Requests" >&2; exit 1; fi ;; esac
     cp "$FAKE_FIXTURES/trivy-vuln.json" "$out" ;;
 esac
 EOF
@@ -661,6 +663,15 @@ my $RULES;
     is($r->{status}, 0, 'rules reads an answer wrapped in text');
     is($r->{stdout}, "$TMP/wrapped-cache/fedcba987654\n", 'and unpacks it');
 
+    # The flashteams command may print a notice after the answer, as a second
+    # JSON document (new program chat messages): the answer still reads.
+    write_file("$TMP/ft-rules-answer", $JSON->pretty->encode({ success => JSON::PP::true, url => $asked, sha256 => $asked_sum,
+        version => 'fedcba987654' }) . $JSON->encode({ chat => { new_for_you => 2, messages => [ { from => 'FlashTeams' } ] } }) . "\n");
+    $JSON->pretty(0);
+    $r = helper(cwd => $REPO, args => [ 'rules', '--dir', "$TMP/notice-cache" ]);
+    is($r->{status}, 0, 'rules reads an answer followed by a notice');
+    is($r->{stdout}, "$TMP/notice-cache/fedcba987654\n", 'and unpacks it');
+
     write_file("$TMP/ft-rules-answer", $JSON->encode({ success => JSON::PP::false, reason => 'not_allowed' }));
     $r = helper(cwd => $REPO, args => [ 'rules', '--dir', $other ], env => { FAKE_FT_EXIT => 1 });
     is($r->{status}, 1, 'rules passes on a refusal');
@@ -853,8 +864,53 @@ my %QUICK;
     $tools = json_file("$out/tools.json");
     my ($failed) = grep { $_->{name} eq 'trivy-vuln' } @$tools;
     is($failed->{status}, 'failed', 'it is recorded as failed');
-    like($failed->{note}, qr/database could not be downloaded: FATAL failed to download vulnerability DB/, "with Trivy's reason");
-    ok(scalar(find_rule(json_file("$out/findings.json"), 'trivy:DS-0002')), 'and the other checks still count');
+    like($failed->{note}, qr/did not finish in two tries.*database could not be downloaded: FATAL failed to download vulnerability DB/, "with Trivy's reason");
+    my @tries = grep { /\Atrivy fs / } split /\n/, $r->{log};
+    is(scalar(@tries), 2, 'after a second try');
+    like($tries[1], qr/ --offline-scan /, 'which does not ask the package servers for indirect dependencies');
+    unlike($tries[0], qr/ --offline-scan /, 'as the first does');
+
+    # A package server that refuses the first try does not lose the check.
+    $out = work('full-maven-refused');
+    $r = helper(cwd => $REPO, args => [ 'run', '--kind', 'security', '--mode', 'full', '--rules', $RULES, '--out', $out ],
+        env => { FAKE_TRIVY_FS_FAIL_ONLINE => 1 });
+    my ($second) = grep { $_->{name} eq 'trivy-vuln' } @{ json_file("$out/tools.json") };
+    is($second->{status}, 'ran', 'a dependency check a package server refused runs on the second try');
+    like($second->{note}, qr/a second try, which did not ask the package servers.*after the first failed: FATAL remote Maven repository returned 429 Too Many Requests/,
+        'and says so, with the reason');
+    ok(scalar(grep { $_->{category} eq 'dependency' } @{ json_file("$out/findings.json") }),
+        'with its findings');
+
+    # Dependency lists without a lock file are named: the scanner has no
+    # versions to look up for them, and "0 findings" would read as clean.
+    my $bare = "$TMP/no-locks";
+    mkdir $bare;
+    system('git', '-C', $bare, 'init', '-q') == 0 or die;
+    mkdir "$bare/$_" for qw(web api api/sub locked node_modules tools);
+    mkdir "$bare/node_modules/x";
+    write_file("$bare/web/package.json", '{"name":"web","dependencies":{"express":"4.0.0"}}');
+    write_file("$bare/tools/package.json", '{"name":"tools","scripts":{"x":"y"}}');
+    write_file("$bare/node_modules/x/package.json", '{"name":"x","dependencies":{"y":"1"}}');
+    write_file("$bare/api/Api.csproj", '<Project><ItemGroup><PackageReference Include="A" Version="1" /></ItemGroup></Project>');
+    write_file("$bare/api/sub/Plain.csproj", '<Project></Project>');
+    write_file("$bare/locked/package.json", '{"dependencies":{"a":"1"}}');
+    write_file("$bare/locked/package-lock.json", '{}');
+    write_file("$bare/Cargo.toml", "[dependencies]\nserde = \"1\"\n");
+    write_file("$bare/Cargo.lock", '');
+    mkdir "$bare/crate";
+    write_file("$bare/crate/Cargo.toml", "[dependencies]\nserde = \"1\"\n");
+    write_file("$bare/Gemfile", "gem 'rails'\n");
+    $out = work('no-locks');
+    $r = helper(cwd => $bare, args => [ 'run', '--kind', 'security', '--mode', 'full', '--rules', $RULES, '--out', $out ]);
+    is($r->{status}, 0, 'a scan of dependency lists without lock files runs');
+    is_deeply(json_file("$out/scan.json")->{unlocked}, [ 'Gemfile', 'api/Api.csproj', 'web/package.json' ],
+        'and names the lists that name dependencies and have no lock file, here or (for a workspace) above');
+    my ($deps) = grep { $_->{name} eq 'trivy-vuln' } @{ json_file("$out/tools.json") };
+    like($deps->{note}, qr/NOT checked, because they have no lock file: 3 dependency lists \(Gemfile, api\/Api\.csproj, web\/package\.json\)/,
+        'in the note FlashTeams receives');
+    like($r->{stdout}, qr/Dependencies NOT checked \(say so in the report\): 3 dependency lists.*\n  Gemfile\n  api\/Api\.csproj\n  web\/package\.json\n/,
+        'and in the summary');
+    ok(scalar(find_rule(json_file(work('full-no-db') . '/findings.json'), 'trivy:DS-0002')), 'and the other checks still count');
 }
 
 # ---------------------------------------------------------------------------

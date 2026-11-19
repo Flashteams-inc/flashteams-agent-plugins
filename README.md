@@ -239,7 +239,12 @@ opengrep keeps its own unpacked program files in `~/.cache/opengrep`.
 Trivy's infrastructure check runs offline, and its dependency check, in
 full mode only, downloads Trivy's vulnerability database (several hundred
 MB the first time, kept in Trivy's cache or `FLASHTEAMS_TRIVY_CACHE`).
-Trivy runs with its usage data turned off.
+Trivy runs with its usage data turned off. Trivy looks up the exact
+versions a lock file names, so the helper lists every dependency list that
+has none (a `package.json`, a `.csproj`, a `build.gradle` and the like) as
+not checked, instead of leaving "0 findings" to read as clean. A
+dependency check that fails is tried once more without asking the package
+servers for a Maven project's indirect dependencies, and says so.
 
 ## Visual QA
 

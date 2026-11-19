@@ -1,6 +1,6 @@
 {
   "name": "flashteams-mcp",
-  "version": "1.12.0",
+  "version": "1.12.1",
   "description": "Connects Grok CLI to the FlashTeams MCP server with your own FlashTeams sign-in, and adds a skill for working your next task. Optional: the flashteams plugin already gives Grok CLI the flashteams command inside Flash Console.",
   "author": {
     "name": "FlashTeams",

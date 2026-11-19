@@ -73,7 +73,7 @@ use JSON::PP ();
 use POSIX ();
 use Time::HiRes ();
 
-our $VERSION = '1.12.0';
+our $VERSION = '1.12.1';
 
 my @SEVERITIES = qw(critical high medium low info);
 my %SEVERITY_RANK = map { $SEVERITIES[$_] => $_ } 0 .. $#SEVERITIES;
@@ -817,7 +817,9 @@ sub cached_bundle {
 # of the three reads the same.
 sub tool_answer {
     my ($stdout) = @_;
-    my $answer = eval { json_codec()->decode($stdout) };
+    # The command may print a notice after the answer (new program chat
+    # messages, as a second JSON document): the answer is the first one.
+    my ($answer) = eval { json_codec()->decode_prefix($stdout) };
     for (1 .. 2) {
         last unless ref $answer eq 'HASH' && !exists $answer->{success} && !exists $answer->{url};
         if (defined $answer->{text} && !ref $answer->{text}) {
@@ -977,6 +979,7 @@ sub cmd_run {
         tools         => [],
         suppressions  => [],
         unchecked     => {},
+        unlocked      => [],
         started       => iso_now(),
     };
     # The scanners' settings come from here, never from the repository: an
@@ -1018,6 +1021,7 @@ sub cmd_run {
         findings      => scalar(@findings),
         suppressions  => $ctx->{suppressions},
         unchecked     => [ sort keys %{ $ctx->{unchecked} } ],
+        unlocked      => $ctx->{unlocked},
     });
     print_summary($ctx, $out, $rules_version, \@findings);
     return 0;
@@ -1684,7 +1688,10 @@ sub trivy_config_finding {
 
 # Trivy's check of the dependencies the lock files name, against known
 # vulnerabilities. Trivy downloads its vulnerability database for this, so
-# it runs only in full mode, and a failure is reported, not fatal.
+# it runs only in full mode, and a failure is reported, not fatal. A try
+# that fails is made once more, without asking the package servers which
+# indirect dependencies a Maven project has: one refusal from such a server
+# otherwise loses the whole check.
 sub run_trivy_vuln {
     my ($ctx) = @_;
     my ($tool, $version, $build) = trivy_tool($ctx, 'trivy-vuln',
@@ -1693,19 +1700,33 @@ sub run_trivy_vuln {
     my $cache = $ENV{FLASHTEAMS_TRIVY_CACHE};
     my $report = "$ctx->{raw}/trivy-vuln.json";
     my $err = "$ctx->{raw}/trivy-vuln.err";
-    my $result = run_program(
-        command => [
-            $tool->{path}, 'fs', '--scanners', 'vuln', '--disable-telemetry', '--skip-version-check', (defined $cache && $cache ne '' ? ('--cache-dir', $cache) : ()),
-            '--format', 'json', '--output', $report, '--quiet', '--exit-code', '0', trivy_own_settings($ctx), trivy_skip_dirs(), $ctx->{target},
-        ],
-        cwd => $ctx->{root}, env => tool_env($ctx), stderr => $err, timeout => scan_timeout(),
-    );
-    my $data = read_json($report, MAX_REPORT_RAW);
-    my $why = first_error(read_bytes($err));
-    unlink($report, $err);
+    my ($data, $why, $result, $second);
+    for my $try (1, 2) {
+        $result = run_program(
+            command => [
+                $tool->{path}, 'fs', '--scanners', 'vuln', '--disable-telemetry', '--skip-version-check', (defined $cache && $cache ne '' ? ('--cache-dir', $cache) : ()),
+                '--format', 'json', '--output', $report, '--quiet', '--exit-code', '0', ($try == 2 ? '--offline-scan' : ()),
+                trivy_own_settings($ctx), trivy_skip_dirs(), $ctx->{target},
+            ],
+            cwd => $ctx->{root}, env => tool_env($ctx), stderr => $err, timeout => scan_timeout(),
+        );
+        $data = read_json($report, MAX_REPORT_RAW);
+        my $said = first_error(read_bytes($err));
+        unlink($report, $err);
+        if (ref $data eq 'HASH') {
+            $second = "a second try, which did not ask the package servers for indirect dependencies (a Maven project's may be missing), after the first failed"
+              . ($why ne '' ? ': ' . clip($why, 160) : '')
+              if $try == 2;
+            last;
+        }
+        $why = $said if $try == 1 || $said ne '';
+        last if $result->{timed_out};
+        sleep 2 if $try == 1;
+    }
+    my $unlocked = unlocked_note($ctx);
     if (ref $data ne 'HASH') {
         add_tool($ctx, 'trivy-vuln', $version, 'failed',
-            $result->{timed_out} ? 'ran out of time' : 'did not finish, often because its database could not be downloaded'
+            $result->{timed_out} ? 'ran out of time' : 'did not finish in two tries, often because its database could not be downloaded'
               . ($why ne '' ? ": $why" : " (exit $result->{status})"));
         return;
     }
@@ -1721,8 +1742,68 @@ sub run_trivy_vuln {
     push @{ $ctx->{findings} }, @found;
     add_tool($ctx, 'trivy-vuln', $version, 'ran',
         join('; ', 'dependency vulnerabilities', plural(scalar @found, 'finding'), $left ? "left out $left in files git ignores" : (),
-            $build ne '' ? $build : ()));
+            $unlocked ne '' ? $unlocked : (), defined $second ? $second : (), $build ne '' ? $build : ()));
     return;
+}
+
+# Dependency lists Trivy cannot check: it reads the exact versions from a
+# lock file, and a list without one names no versions to look up. Each kind
+# of list, the lock files that serve it, and whether a lock file in a folder
+# above serves it too (a workspace keeps one at its top).
+my @DEPENDENCY_LISTS = (
+    [ qr/\Apackage\.json\z/, [qw(package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml bun.lock)], 1, qr/"(?:dependencies|devDependencies|optionalDependencies)"\s*:\s*\{\s*"/ ],
+    [ qr/\.(?:cs|fs|vb)proj\z/, [qw(packages.lock.json packages.config Directory.Packages.props)], 1, qr/<PackageReference\b/ ],
+    [ qr/\Abuild\.gradle(?:\.kts)?\z/, [qw(gradle.lockfile)], 0, qr/\b(?:implementation|api|compile|classpath|runtimeOnly)\b/ ],
+    [ qr/\Acomposer\.json\z/, [qw(composer.lock)], 0, qr/"require(?:-dev)?"\s*:\s*\{\s*"/ ],
+    [ qr/\AGemfile\z/, [qw(Gemfile.lock)], 0, qr/^\s*gem\s/m ],
+    [ qr/\APipfile\z/, [qw(Pipfile.lock)], 0, undef ],
+    [ qr/\Apyproject\.toml\z/, [qw(poetry.lock uv.lock pdm.lock requirements.txt)], 1, qr/^\s*(?:dependencies\s*=\s*\[\s*["'\n]|\[tool\.poetry\.dependencies\])/m ],
+    [ qr/\ACargo\.toml\z/, [qw(Cargo.lock)], 1, qr/^\s*\[(?:workspace\.)?dependencies\]/m ],
+    [ qr/\APodfile\z/, [qw(Podfile.lock)], 0, undef ],
+    [ qr/\APackage\.swift\z/, [qw(Package.resolved)], 0, qr/\.package\s*\(/ ],
+    [ qr/\Apubspec\.yaml\z/, [qw(pubspec.lock)], 0, undef ],
+    [ qr/\Amix\.exs\z/, [qw(mix.lock)], 0, undef ],
+);
+
+# The dependency lists among the files git shows that name dependencies and
+# have no lock file Trivy reads, sorted.
+sub unlocked_lists {
+    my ($ctx) = @_;
+    my %skipped = map { $_ => 1 } @SKIPPED_DIRS;
+    my @unlocked;
+    my $read = 0;
+    for my $path (sort keys %{ $ctx->{visible} }) {
+        my @parts = split m{/}, $path;
+        my $name = pop @parts;
+        next if grep { $skipped{$_} } @parts;
+        my ($kind) = grep { $name =~ $_->[0] } @DEPENDENCY_LISTS;
+        next unless $kind;
+        my ($locks, $above, $names_some) = @$kind[ 1 .. 3 ];
+        my @dirs = (join('/', @parts));
+        if ($above) {
+            my @up = @parts;
+            while (@up) { pop @up; push @dirs, join('/', @up) }
+        }
+        next if grep { my $dir = $_; grep { $ctx->{visible}{ ($dir eq '' ? '' : "$dir/") . $_ } } @$locks } @dirs;
+        if ($names_some) {
+            last if ++$read > 2000;
+            my $text = read_bytes("$ctx->{root}/$path", 2 * 1024 * 1024);
+            next unless defined $text && $text =~ $names_some;
+        }
+        push @unlocked, $path;
+    }
+    return @unlocked;
+}
+
+# The same as a note for the dependency check, and kept for the summary.
+sub unlocked_note {
+    my ($ctx) = @_;
+    my @unlocked = unlocked_lists($ctx);
+    $ctx->{unlocked} = [ map { chars($_) } @unlocked ];
+    return '' unless @unlocked;
+    my @shown = @unlocked > 5 ? @unlocked[ 0 .. 4 ] : @unlocked;
+    return 'NOT checked, because they have no lock file: ' . plural(scalar @unlocked, 'dependency list') . ' ('
+      . join(', ', map { chars($_) } @shown) . (@unlocked > @shown ? ' and ' . (@unlocked - @shown) . ' more' : '') . ')';
 }
 
 sub trivy_vuln_finding {
@@ -1836,6 +1917,12 @@ sub print_summary {
         my @install = grep { $PINS{$_} } map { $_ eq 'semgrep' ? 'opengrep' : $_ } @unchecked;
         print "Not checked builds: @unchecked. They ran, but were not checked against a pinned checksum; say so in the report.\n";
         print qq{  The checked ones: perl "} . chars($SELF) . qq{" install @install\n} if @install;
+    }
+    if (my @unlocked = @{ $ctx->{unlocked} }) {
+        print 'Dependencies NOT checked (say so in the report): ' . plural(scalar @unlocked, 'dependency list')
+          . " with no lock file, so the scanner had no versions to look up:\n";
+        print "  $_\n" for @unlocked > 20 ? @unlocked[ 0 .. 19 ] : @unlocked;
+        print '  and ' . (@unlocked - 20) . " more, all in scan.json\n" if @unlocked > 20;
     }
     if (@{ $ctx->{suppressions} }) {
         print "The repository's own suppressions (say them in the report):\n";
